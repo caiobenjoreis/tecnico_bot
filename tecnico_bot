@@ -2,6 +2,7 @@ import os
 import json
 from datetime import datetime, timedelta
 from collections import defaultdict
+from zoneinfo import ZoneInfo
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters, ContextTypes
 
@@ -11,6 +12,7 @@ AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARD
 # Arquivo para salvar os dados
 DADOS_FILE = 'instalacoes.json'
 USUARIOS_FILE = 'usuarios.json'
+TZ = ZoneInfo("America/Sao_Paulo")
 
 # Carregar dados existentes
 def carregar_dados():
@@ -56,7 +58,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AGUARDANDO_NOME
     keyboard = [
         [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
-        [InlineKeyboardButton("🔍 Consultar SA", callback_data='consultar')],
+        [InlineKeyboardButton("🔍 Consultar GPON", callback_data='consultar')],
         [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
         [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
     ]
@@ -130,7 +132,7 @@ async def menu_relatorios(query):
 # Gerar relatório mensal
 def gerar_relatorio_mensal():
     dados = carregar_dados()
-    agora = datetime.now()
+    agora = datetime.now(TZ)
     mes_atual = agora.month
     ano_atual = agora.year
     
@@ -138,7 +140,7 @@ def gerar_relatorio_mensal():
     instalacoes_mes = []
     for inst in dados:
         try:
-            data_inst = datetime.strptime(inst['data'], '%d/%m/%Y %H:%M')
+            data_inst = datetime.strptime(inst['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
             if data_inst.month == mes_atual and data_inst.year == ano_atual:
                 instalacoes_mes.append(inst)
         except:
@@ -173,7 +175,7 @@ def gerar_relatorio_mensal():
 # Gerar relatório semanal
 def gerar_relatorio_semanal():
     dados = carregar_dados()
-    agora = datetime.now()
+    agora = datetime.now(TZ)
     inicio_semana = agora - timedelta(days=agora.weekday())
     inicio_semana = inicio_semana.replace(hour=0, minute=0, second=0, microsecond=0)
     
@@ -181,7 +183,7 @@ def gerar_relatorio_semanal():
     instalacoes_semana = []
     for inst in dados:
         try:
-            data_inst = datetime.strptime(inst['data'], '%d/%m/%Y %H:%M')
+            data_inst = datetime.strptime(inst['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
             if data_inst >= inicio_semana:
                 instalacoes_semana.append(inst)
         except:
@@ -215,13 +217,13 @@ def gerar_relatorio_semanal():
 # Gerar relatório do dia
 def gerar_relatorio_hoje():
     dados = carregar_dados()
-    agora = datetime.now()
+    agora = datetime.now(TZ)
     
     # Filtrar instalações de hoje
     instalacoes_hoje = []
     for inst in dados:
         try:
-            data_inst = datetime.strptime(inst['data'], '%d/%m/%Y %H:%M')
+            data_inst = datetime.strptime(inst['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
             if data_inst.date() == agora.date():
                 instalacoes_hoje.append(inst)
         except:
@@ -289,7 +291,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'consultar':
         await query.edit_message_text(
             '🔍 *Consultar Instalação*\n\n'
-            'Digite o número da SA para buscar:',
+            'Digite o número do GPON para buscar:',
             parse_mode='Markdown'
         )
         return None
@@ -347,7 +349,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'voltar':
         keyboard = [
             [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
-            [InlineKeyboardButton("🔍 Consultar SA", callback_data='consultar')],
+            [InlineKeyboardButton("🔍 Consultar GPON", callback_data='consultar')],
             [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
             [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
         ]
@@ -428,7 +430,7 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'tecnico_id': update.message.from_user.id,
         'tecnico_nome': tecnico_nome,
         'tecnico_regiao': tecnico_regiao,
-        'data': datetime.now().strftime('%d/%m/%Y %H:%M')
+        'data': datetime.now(TZ).strftime('%d/%m/%Y %H:%M')
     }
     
     dados.append(nova_instalacao)
@@ -451,14 +453,14 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Consultar por SA
 async def consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sa_busca = update.message.text.strip()
+    gpon_busca = update.message.text.strip()
     dados = carregar_dados()
     
-    resultados = [d for d in dados if sa_busca.lower() in d['sa'].lower()]
+    resultados = [d for d in dados if gpon_busca.lower() in d['gpon'].lower()]
     
     if not resultados:
         await update.message.reply_text(
-            f'❌ Nenhuma instalação encontrada para SA: `{sa_busca}`',
+            f'❌ Nenhuma instalação encontrada para GPON: `{gpon_busca}`',
             parse_mode='Markdown'
         )
         return
@@ -521,15 +523,15 @@ async def receber_data_fim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if fim < inicio:
         await update.message.reply_text('❌ A data final é anterior à inicial. Envie novamente a data final.', parse_mode='Markdown')
         return AGUARDANDO_DATA_FIM
-    inicio_dt = inicio.replace(hour=0, minute=0, second=0, microsecond=0)
-    fim_dt = fim.replace(hour=23, minute=59, second=59, microsecond=0)
+    inicio_dt = inicio.replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=TZ)
+    fim_dt = fim.replace(hour=23, minute=59, second=59, microsecond=0).replace(tzinfo=TZ)
     dados = carregar_dados()
     user_id = update.message.from_user.id
     username = update.message.from_user.username or update.message.from_user.first_name
     instalacoes_user = []
     for d in dados:
         try:
-            data_inst = datetime.strptime(d['data'], '%d/%m/%Y %H:%M')
+            data_inst = datetime.strptime(d['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
             if d.get('tecnico_id') == user_id and inicio_dt <= data_inst <= fim_dt:
                 instalacoes_user.append(d)
         except:
