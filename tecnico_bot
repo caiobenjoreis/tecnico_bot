@@ -6,40 +6,17 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters, ContextTypes
 
 # Estados da conversa
-AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO = range(8)
+AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM = range(5)
 
 # Arquivo para salvar os dados
 DADOS_FILE = 'instalacoes.json'
-USUARIOS_FILE = 'usuarios.json'
 
 # Carregar dados existentes
 def carregar_dados():
     if os.path.exists(DADOS_FILE):
-        try:
-            with open(DADOS_FILE, 'r', encoding='utf-8') as f:
-                s = f.read().strip()
-                if not s:
-                    return []
-                return json.loads(s)
-        except:
-            return []
+        with open(DADOS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
     return []
-
-def carregar_usuarios():
-    if os.path.exists(USUARIOS_FILE):
-        try:
-            with open(USUARIOS_FILE, 'r', encoding='utf-8') as f:
-                s = f.read().strip()
-                if not s:
-                    return []
-                return json.loads(s)
-        except:
-            return []
-    return []
-
-def salvar_usuarios(usuarios):
-    with open(USUARIOS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(usuarios, f, ensure_ascii=False, indent=2)
 
 # Salvar dados
 def salvar_dados(dados):
@@ -48,16 +25,6 @@ def salvar_dados(dados):
 
 # Comando /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    usuarios = carregar_usuarios()
-    cadastrado = next((u for u in usuarios if u.get('id') == user_id), None)
-    if not cadastrado:
-        await update.message.reply_text(
-            '👋 *Primeiro acesso*\n\nDigite seu *nome*:',
-            parse_mode='Markdown'
-        )
-        return AGUARDANDO_NOME
-    nome_mostrar = f"{cadastrado.get('nome', '')} {cadastrado.get('sobrenome', '')}".strip() or (update.message.from_user.username or update.message.from_user.first_name)
     keyboard = [
         [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
         [InlineKeyboardButton("🔍 Consultar SA", callback_data='consultar')],
@@ -65,12 +32,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await update.message.reply_text(
-        f'🛠️ *Bot de Registro de Instalações*\n\nBem-vindo, {nome_mostrar}! Escolha uma opção:',
+        '🛠️ *Bot de Registro de Instalações*\n\n'
+        'Bem-vindo! Escolha uma opção:',
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
-    return ConversationHandler.END
 
 # Menu de relatórios
 async def menu_relatorios(query):
@@ -380,17 +348,12 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     dados = carregar_dados()
     
-    usuarios = carregar_usuarios()
-    perfil = next((u for u in usuarios if u.get('id') == update.message.from_user.id), None)
-    nome_tecnico = None
-    if perfil:
-        nome_tecnico = f"{perfil.get('nome','')} {perfil.get('sobrenome','')}".strip()
     nova_instalacao = {
         'sa': context.user_data['sa'],
         'gpon': context.user_data['gpon'],
         'fotos': context.user_data.get('fotos', []),
         'tecnico_id': update.message.from_user.id,
-        'tecnico_nome': nome_tecnico or (update.message.from_user.username or update.message.from_user.first_name),
+        'tecnico_nome': update.message.from_user.username or update.message.from_user.first_name,
         'data': datetime.now().strftime('%d/%m/%Y %H:%M')
     }
     
@@ -457,46 +420,6 @@ async def comando_semanal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def comando_hoje(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = gerar_relatorio_hoje()
     await update.message.reply_text(msg, parse_mode='Markdown')
-
-async def receber_nome(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['cad_nome'] = update.message.text.strip()
-    await update.message.reply_text('Agora digite seu *sobrenome*:', parse_mode='Markdown')
-    return AGUARDANDO_SOBRENOME
-
-async def receber_sobrenome(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['cad_sobrenome'] = update.message.text.strip()
-    await update.message.reply_text('Por fim, digite a *região* onde atua:', parse_mode='Markdown')
-    return AGUARDANDO_REGIAO
-
-async def receber_regiao(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    regiao = update.message.text.strip()
-    usuarios = carregar_usuarios()
-    user = update.message.from_user
-    novo = {
-        'id': user.id,
-        'nome': context.user_data.get('cad_nome', ''),
-        'sobrenome': context.user_data.get('cad_sobrenome', ''),
-        'regiao': regiao,
-        'username': user.username or '',
-        'created_at': datetime.now().strftime('%d/%m/%Y %H:%M')
-    }
-    usuarios = [u for u in usuarios if u.get('id') != user.id] + [novo]
-    salvar_usuarios(usuarios)
-    context.user_data.pop('cad_nome', None)
-    context.user_data.pop('cad_sobrenome', None)
-    keyboard = [
-        [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
-        [InlineKeyboardButton("🔍 Consultar SA", callback_data='consultar')],
-        [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
-        [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        f'✅ Cadastro concluído! Bem-vindo, {novo["nome"]} {novo["sobrenome"]} ({novo["regiao"]}).\n\nEscolha uma opção:',
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
-    return ConversationHandler.END
 
 async def receber_data_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
@@ -593,7 +516,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
     
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start), CallbackQueryHandler(button_callback)],
+        entry_points=[CallbackQueryHandler(button_callback)],
         states={
             AGUARDANDO_SA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_sa)],
             AGUARDANDO_GPON: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_gpon)],
@@ -603,14 +526,11 @@ def main():
             ],
             AGUARDANDO_DATA_INICIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_data_inicio)],
             AGUARDANDO_DATA_FIM: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_data_fim)],
-            AGUARDANDO_NOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nome)],
-            AGUARDANDO_SOBRENOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_sobrenome)],
-            AGUARDANDO_REGIAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_regiao)],
         },
         fallbacks=[CommandHandler('cancelar', cancelar)]
     )
     
-    
+    app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('mensal', comando_mensal))
     app.add_handler(CommandHandler('semanal', comando_semanal))
     app.add_handler(CommandHandler('hoje', comando_hoje))
