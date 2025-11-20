@@ -488,9 +488,21 @@ async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Configurar o bot
 def main():
-    TOKEN = os.getenv("TELEGRAM_TOKEN")
-    if not TOKEN:
-        raise RuntimeError("TELEGRAM_TOKEN não definido nas variáveis de ambiente")
+    def _get_token():
+        t = os.getenv("TELEGRAM_TOKEN")
+        if t:
+            return t.strip()
+        for p in ("/etc/secrets/TELEGRAM_TOKEN", "TELEGRAM_TOKEN"):
+            try:
+                if os.path.exists(p):
+                    with open(p, "r", encoding="utf-8") as f:
+                        c = f.read().strip()
+                        if c:
+                            return c
+            except:
+                pass
+        raise RuntimeError("TELEGRAM_TOKEN não definido nas variáveis de ambiente ou secret file")
+    TOKEN = _get_token()
     
     app = Application.builder().token(TOKEN).build()
     
