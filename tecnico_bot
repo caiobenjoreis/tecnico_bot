@@ -5,6 +5,7 @@ from collections import defaultdict
 from zoneinfo import ZoneInfo
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters, ContextTypes
+from supabase import create_client, Client
 
 # Estados da conversa
 AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO = range(8)
@@ -14,8 +15,29 @@ DADOS_FILE = 'instalacoes.json'
 USUARIOS_FILE = 'usuarios.json'
 TZ = ZoneInfo("America/Sao_Paulo")
 
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+USE_SUPABASE = bool(SUPABASE_URL and SUPABASE_KEY)
+_SUPABASE_CLIENT = None
+
+def get_supabase():
+    global _SUPABASE_CLIENT
+    if not USE_SUPABASE:
+        return None
+    if _SUPABASE_CLIENT is None:
+        _SUPABASE_CLIENT = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _SUPABASE_CLIENT
+
 # Carregar dados existentes
 def carregar_dados():
+    if USE_SUPABASE:
+        try:
+            sb = get_supabase()
+            resp = sb.table("instalacoes").select("*").execute()
+            data = resp.data or []
+            return data
+        except:
+            return []
     if os.path.exists(DADOS_FILE):
         try:
             with open(DADOS_FILE, 'r', encoding='utf-8') as f:
@@ -29,10 +51,36 @@ def carregar_dados():
 
 # Salvar dados
 def salvar_dados(dados):
+    if USE_SUPABASE:
+        try:
+            if isinstance(dados, list) and dados:
+                registro = dados[-1]
+                sb = get_supabase()
+                sb.table("instalacoes").insert(registro).execute()
+            return
+        except:
+            pass
     with open(DADOS_FILE, 'w', encoding='utf-8') as f:
         json.dump(dados, f, ensure_ascii=False, indent=2)
 
 def carregar_usuarios():
+    if USE_SUPABASE:
+        try:
+            sb = get_supabase()
+            resp = sb.table("usuarios").select("*").execute()
+            rows = resp.data or []
+            usuarios = {}
+            for r in rows:
+                uid = str(r.get('id'))
+                usuarios[uid] = {
+                    'nome': r.get('nome') or '',
+                    'sobrenome': r.get('sobrenome') or '',
+                    'regiao': r.get('regiao'),
+                    'telegram': r.get('telegram')
+                }
+            return usuarios
+        except:
+            return {}
     if os.path.exists(USUARIOS_FILE):
         try:
             with open(USUARIOS_FILE, 'r', encoding='utf-8') as f:
@@ -45,8 +93,56 @@ def carregar_usuarios():
     return {}
 
 def salvar_usuarios(usuarios):
+    if USE_SUPABASE:
+        try:
+            sb = get_supabase()
+            payload = []
+            for k, v in (usuarios or {}).items():
+                payload.append({
+                    'id': int(k) if str(k).isdigit() else str(k),
+                    'nome': v.get('nome') or '',
+                    'sobrenome': v.get('sobrenome') or '',
+                    'regiao': v.get('regiao'),
+                    'telegram': v.get('telegram')
+                })
+            if payload:
+                sb.table("usuarios").upsert(payload).execute()
+            return
+        except:
+            pass
     with open(USUARIOS_FILE, 'w', encoding='utf-8') as f:
         json.dump(usuarios, f, ensure_ascii=False, indent=2)
+
+def salvar_usuario(uid: str, dados_usuario: dict):
+    if USE_SUPABASE:
+        try:
+            sb = get_supabase()
+            row = {
+                'id': int(uid) if str(uid).isdigit() else str(uid),
+                'nome': dados_usuario.get('nome') or '',
+                'sobrenome': dados_usuario.get('sobrenome') or '',
+                'regiao': dados_usuario.get('regiao'),
+                'telegram': dados_usuario.get('telegram')
+            }
+            sb.table("usuarios").upsert(row).execute()
+            return
+        except:
+            pass
+    usuarios = carregar_usuarios()
+    usuarios[str(uid)] = dados_usuario
+    salvar_usuarios(usuarios)
+
+def salvar_instalacao(instalacao: dict):
+    if USE_SUPABASE:
+        try:
+            sb = get_supabase()
+            sb.table("instalacoes").insert(instalacao).execute()
+            return
+        except:
+            pass
+    dados = carregar_dados()
+    dados.append(instalacao)
+    salvar_dados(dados)
 
 # Comando /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -60,6 +156,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
         [InlineKeyboardButton("🔍 Consultar GPON", callback_data='consultar')],
         [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
+        [InlineKeyboardButton("📆 Consulta Produção", callback_data='consulta_producao')],
         [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -88,13 +185,14 @@ async def receber_regiao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     usuarios = carregar_usuarios()
     ident = context.user_data.get('ident', {})
-    usuarios[str(user_id)] = {
+    dados_usuario = {
         'nome': ident.get('nome', ''),
         'sobrenome': ident.get('sobrenome', ''),
         'regiao': regiao,
         'telegram': update.message.from_user.username or update.message.from_user.first_name
     }
-    salvar_usuarios(usuarios)
+    usuarios[str(user_id)] = dados_usuario
+    salvar_usuario(str(user_id), dados_usuario)
     keyboard = [
         [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
         [InlineKeyboardButton("🔍 Consultar SA", callback_data='consultar')],
@@ -295,6 +393,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
         return None
+
+    elif query.data == 'consulta_producao':
+        context.user_data['modo'] = 'producao'
+        await query.edit_message_text(
+            '📆 *Consulta Produção*\n\nEnvie a *data inicial* no formato `dd/mm/aaaa`:',
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_DATA_INICIO
     
     elif query.data == 'minhas':
         dados = carregar_dados()
@@ -351,6 +457,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
             [InlineKeyboardButton("🔍 Consultar GPON", callback_data='consultar')],
             [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
+            [InlineKeyboardButton("📆 Consulta Produção", callback_data='consulta_producao')],
             [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -416,7 +523,6 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text('❌ Erro: Dados incompletos. Use /start para começar novamente.')
         return ConversationHandler.END
     
-    dados = carregar_dados()
     usuarios = carregar_usuarios()
     uid = str(update.message.from_user.id)
     perfil = usuarios.get(uid)
@@ -433,8 +539,7 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'data': datetime.now(TZ).strftime('%d/%m/%Y %H:%M')
     }
     
-    dados.append(nova_instalacao)
-    salvar_dados(dados)
+    salvar_instalacao(nova_instalacao)
     
     await update.message.reply_text(
         '✅ *Instalação registrada com sucesso!*\n\n'
@@ -506,8 +611,17 @@ async def receber_data_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text('❌ Data inválida. Use o formato dd/mm/aaaa.', parse_mode='Markdown')
         return AGUARDANDO_DATA_INICIO
     context.user_data['data_inicio'] = inicio
-    await update.message.reply_text('Agora envie a *data final* no formato `dd/mm/aaaa`:', parse_mode='Markdown')
+    modo = context.user_data.get('modo')
+    if modo == 'producao':
+        await update.message.reply_text('Agora envie a *data de fechamento* no formato `dd/mm/aaaa`:', parse_mode='Markdown')
+    else:
+        await update.message.reply_text('Agora envie a *data final* no formato `dd/mm/aaaa`:', parse_mode='Markdown')
     return AGUARDANDO_DATA_FIM
+
+async def iniciar_producao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['modo'] = 'producao'
+    await update.message.reply_text('📆 *Consulta Produção*\n\nEnvie a *data inicial* no formato `dd/mm/aaaa`:', parse_mode='Markdown')
+    return AGUARDANDO_DATA_INICIO
 
 async def receber_data_fim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
@@ -540,21 +654,36 @@ async def receber_data_fim(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = f'❌ Nenhuma instalação encontrada entre {inicio.strftime("%d/%m/%Y")} e {fim.strftime("%d/%m/%Y")}.'
         await update.message.reply_text(msg, parse_mode='Markdown')
         context.user_data.pop('data_inicio', None)
+        context.user_data.pop('modo', None)
         return ConversationHandler.END
-    msg = (
-        f'📆 *Relatório por Período*\n'
-        f'Período: {inicio.strftime("%d/%m/%Y")} a {fim.strftime("%d/%m/%Y")}\n'
-        f'👤 Técnico: {username}\n\n'
-        f'📊 *Total de Instalações:* {len(instalacoes_user)}\n\n'
-    )
-    ultimos = instalacoes_user[-10:]
-    i = 1
-    for inst in ultimos:
-        msg += f'{i}. SA: `{inst["sa"]}` | GPON: `{inst["gpon"]}`\n'
-        msg += f'   Data: {inst["data"]}\n\n'
-        i += 1
-    await update.message.reply_text(msg, parse_mode='Markdown')
+    modo = context.user_data.get('modo')
+    if modo == 'producao':
+        dias_periodo = (fim_dt - inicio_dt).days + 1
+        media_dia = len(instalacoes_user) / dias_periodo if dias_periodo > 0 else 0
+        msg = (
+            f'📆 *Produção no Período*\n'
+            f'Período: {inicio.strftime("%d/%m/%Y")} a {fim.strftime("%d/%m/%Y")}\n'
+            f'👤 Técnico: {username}\n\n'
+            f'📊 *Total de Instalações:* {len(instalacoes_user)}\n'
+            f'📈 *Média diária:* {media_dia:.1f} instalações/dia\n'
+        )
+        await update.message.reply_text(msg, parse_mode='Markdown')
+    else:
+        msg = (
+            f'📆 *Relatório por Período*\n'
+            f'Período: {inicio.strftime("%d/%m/%Y")} a {fim.strftime("%d/%m/%Y")}\n'
+            f'👤 Técnico: {username}\n\n'
+            f'📊 *Total de Instalações:* {len(instalacoes_user)}\n\n'
+        )
+        ultimos = instalacoes_user[-10:]
+        i = 1
+        for inst in ultimos:
+            msg += f'{i}. SA: `{inst["sa"]}` | GPON: `{inst["gpon"]}`\n'
+            msg += f'   Data: {inst["data"]}\n\n'
+            i += 1
+        await update.message.reply_text(msg, parse_mode='Markdown')
     context.user_data.pop('data_inicio', None)
+    context.user_data.pop('modo', None)
     return ConversationHandler.END
 
 # Cancelar operação
@@ -593,7 +722,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
     
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start), CallbackQueryHandler(button_callback)],
+        entry_points=[CommandHandler('start', start), CommandHandler('producao', iniciar_producao), CallbackQueryHandler(button_callback)],
         states={
             AGUARDANDO_SA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_sa)],
             AGUARDANDO_GPON: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_gpon)],
