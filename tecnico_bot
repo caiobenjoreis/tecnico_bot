@@ -37,13 +37,17 @@ def carregar_usuarios():
     return {}
 
 def salvar_usuarios(usuarios):
-    with open(USUARIOS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(usuarios, f, ensure_ascii=False, indent=2)
+    tmp = USUARIOS_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(usuarios or {}, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, USUARIOS_FILE)
 
 # Salvar dados
 def salvar_dados(dados):
-    with open(DADOS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(dados, f, ensure_ascii=False, indent=2)
+    tmp = DADOS_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(dados or [], f, ensure_ascii=False, indent=2)
+    os.replace(tmp, DADOS_FILE)
 
 # Comando /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
