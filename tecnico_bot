@@ -30,119 +30,81 @@ def get_supabase():
 
 # Carregar dados existentes
 def carregar_dados():
-    if USE_SUPABASE:
-        try:
-            sb = get_supabase()
-            resp = sb.table("instalacoes").select("*").execute()
-            data = resp.data or []
-            return data
-        except:
-            return []
-    if os.path.exists(DADOS_FILE):
-        try:
-            with open(DADOS_FILE, 'r', encoding='utf-8') as f:
-                c = f.read().strip()
-                if not c:
-                    return []
-                return json.loads(c)
-        except:
-            return []
-    return []
+    try:
+        sb = get_supabase()
+        resp = sb.table("instalacoes").select("*").execute()
+        data = resp.data or []
+        return data
+    except:
+        return []
 
 # Salvar dados
 def salvar_dados(dados):
-    if USE_SUPABASE:
-        try:
-            if isinstance(dados, list) and dados:
-                registro = dados[-1]
-                sb = get_supabase()
-                sb.table("instalacoes").insert(registro).execute()
-            return
-        except:
-            pass
-    with open(DADOS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(dados, f, ensure_ascii=False, indent=2)
+    try:
+        sb = get_supabase()
+        if isinstance(dados, list):
+            if dados:
+                sb.table("instalacoes").insert(dados).execute()
+        else:
+            sb.table("instalacoes").insert(dados).execute()
+    except:
+        pass
 
 def carregar_usuarios():
-    if USE_SUPABASE:
-        try:
-            sb = get_supabase()
-            resp = sb.table("usuarios").select("*").execute()
-            rows = resp.data or []
-            usuarios = {}
-            for r in rows:
-                uid = str(r.get('id'))
-                usuarios[uid] = {
-                    'nome': r.get('nome') or '',
-                    'sobrenome': r.get('sobrenome') or '',
-                    'regiao': r.get('regiao'),
-                    'telegram': r.get('telegram')
-                }
-            return usuarios
-        except:
-            return {}
-    if os.path.exists(USUARIOS_FILE):
-        try:
-            with open(USUARIOS_FILE, 'r', encoding='utf-8') as f:
-                c = f.read().strip()
-                if not c:
-                    return {}
-                return json.loads(c)
-        except:
-            return {}
-    return {}
+    try:
+        sb = get_supabase()
+        resp = sb.table("usuarios").select("*").execute()
+        rows = resp.data or []
+        usuarios = {}
+        for r in rows:
+            uid = str(r.get('id'))
+            usuarios[uid] = {
+                'nome': r.get('nome') or '',
+                'sobrenome': r.get('sobrenome') or '',
+                'regiao': r.get('regiao'),
+                'telegram': r.get('telegram')
+            }
+        return usuarios
+    except:
+        return {}
 
 def salvar_usuarios(usuarios):
-    if USE_SUPABASE:
-        try:
-            sb = get_supabase()
-            payload = []
-            for k, v in (usuarios or {}).items():
-                payload.append({
-                    'id': int(k) if str(k).isdigit() else str(k),
-                    'nome': v.get('nome') or '',
-                    'sobrenome': v.get('sobrenome') or '',
-                    'regiao': v.get('regiao'),
-                    'telegram': v.get('telegram')
-                })
-            if payload:
-                sb.table("usuarios").upsert(payload).execute()
-            return
-        except:
-            pass
-    with open(USUARIOS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(usuarios, f, ensure_ascii=False, indent=2)
+    try:
+        sb = get_supabase()
+        payload = []
+        for k, v in (usuarios or {}).items():
+            payload.append({
+                'id': int(k) if str(k).isdigit() else str(k),
+                'nome': v.get('nome') or '',
+                'sobrenome': v.get('sobrenome') or '',
+                'regiao': v.get('regiao'),
+                'telegram': v.get('telegram')
+            })
+        if payload:
+            sb.table("usuarios").upsert(payload).execute()
+    except:
+        pass
 
 def salvar_usuario(uid: str, dados_usuario: dict):
-    if USE_SUPABASE:
-        try:
-            sb = get_supabase()
-            row = {
-                'id': int(uid) if str(uid).isdigit() else str(uid),
-                'nome': dados_usuario.get('nome') or '',
-                'sobrenome': dados_usuario.get('sobrenome') or '',
-                'regiao': dados_usuario.get('regiao'),
-                'telegram': dados_usuario.get('telegram')
-            }
-            sb.table("usuarios").upsert(row).execute()
-            return
-        except:
-            pass
-    usuarios = carregar_usuarios()
-    usuarios[str(uid)] = dados_usuario
-    salvar_usuarios(usuarios)
+    try:
+        sb = get_supabase()
+        row = {
+            'id': int(uid) if str(uid).isdigit() else str(uid),
+            'nome': dados_usuario.get('nome') or '',
+            'sobrenome': dados_usuario.get('sobrenome') or '',
+            'regiao': dados_usuario.get('regiao'),
+            'telegram': dados_usuario.get('telegram')
+        }
+        sb.table("usuarios").upsert(row).execute()
+    except:
+        pass
 
 def salvar_instalacao(instalacao: dict):
-    if USE_SUPABASE:
-        try:
-            sb = get_supabase()
-            sb.table("instalacoes").insert(instalacao).execute()
-            return
-        except:
-            pass
-    dados = carregar_dados()
-    dados.append(instalacao)
-    salvar_dados(dados)
+    try:
+        sb = get_supabase()
+        sb.table("instalacoes").insert(instalacao).execute()
+    except:
+        pass
 
 # Comando /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -718,6 +680,8 @@ def main():
     import re
     if not re.match(r"^\d+:[A-Za-z0-9_-]+$", TOKEN):
         raise RuntimeError("TELEGRAM_TOKEN inválido. Verifique se copiou exatamente o token do @BotFather.")
+    if not USE_SUPABASE:
+        raise RuntimeError("SUPABASE_URL/SUPABASE_KEY não definidos nas variáveis de ambiente")
     
     app = Application.builder().token(TOKEN).build()
     
