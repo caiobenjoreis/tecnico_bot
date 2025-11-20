@@ -16,10 +16,16 @@ REGIOES_SUPORTADAS = ['Norte', 'Nordeste', 'Centro-Oeste', 'Sudeste', 'Sul']
 
 # Carregar dados existentes
 def carregar_dados():
-    if os.path.exists(DADOS_FILE):
+    if not os.path.exists(DADOS_FILE):
+        return []
+    try:
         with open(DADOS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return []
+            content = f.read().strip()
+            if not content:
+                return []
+            return json.loads(content)
+    except:
+        return []
 
 def carregar_usuarios():
     if os.path.exists(USUARIOS_FILE):
