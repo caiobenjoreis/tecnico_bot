@@ -15,14 +15,26 @@ USUARIOS_FILE = 'usuarios.json'
 # Carregar dados existentes
 def carregar_dados():
     if os.path.exists(DADOS_FILE):
-        with open(DADOS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(DADOS_FILE, 'r', encoding='utf-8') as f:
+                s = f.read().strip()
+                if not s:
+                    return []
+                return json.loads(s)
+        except:
+            return []
     return []
 
 def carregar_usuarios():
     if os.path.exists(USUARIOS_FILE):
-        with open(USUARIOS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+        try:
+            with open(USUARIOS_FILE, 'r', encoding='utf-8') as f:
+                s = f.read().strip()
+                if not s:
+                    return []
+                return json.loads(s)
+        except:
+            return []
     return []
 
 def salvar_usuarios(usuarios):
