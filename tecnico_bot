@@ -6,10 +6,11 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters, ContextTypes
 
 # Estados da conversa
-AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM = range(5)
+AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO = range(8)
 
 # Arquivo para salvar os dados
 DADOS_FILE = 'instalacoes.json'
+USUARIOS_FILE = 'usuarios.json'
 
 # Carregar dados existentes
 def carregar_dados():
@@ -23,8 +24,24 @@ def salvar_dados(dados):
     with open(DADOS_FILE, 'w', encoding='utf-8') as f:
         json.dump(dados, f, ensure_ascii=False, indent=2)
 
+def carregar_usuarios():
+    if os.path.exists(USUARIOS_FILE):
+        with open(USUARIOS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+def salvar_usuarios(usuarios):
+    with open(USUARIOS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(usuarios, f, ensure_ascii=False, indent=2)
+
 # Comando /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    usuarios = carregar_usuarios()
+    if str(user_id) not in usuarios:
+        context.user_data['ident'] = {}
+        await update.message.reply_text('👤 Primeiro acesso. Informe seu nome:')
+        return AGUARDANDO_NOME
     keyboard = [
         [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
         [InlineKeyboardButton("🔍 Consultar SA", callback_data='consultar')],
@@ -32,13 +49,52 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
     await update.message.reply_text(
         '🛠️ *Bot de Registro de Instalações*\n\n'
         'Bem-vindo! Escolha uma opção:',
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
+    return ConversationHandler.END
+
+async def receber_nome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.setdefault('ident', {})
+    context.user_data['ident']['nome'] = update.message.text.strip()
+    await update.message.reply_text('Informe seu sobrenome:')
+    return AGUARDANDO_SOBRENOME
+
+async def receber_sobrenome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.setdefault('ident', {})
+    context.user_data['ident']['sobrenome'] = update.message.text.strip()
+    await update.message.reply_text('Informe sua região de atuação:')
+    return AGUARDANDO_REGIAO
+
+async def receber_regiao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    regiao = update.message.text.strip()
+    user_id = update.message.from_user.id
+    usuarios = carregar_usuarios()
+    ident = context.user_data.get('ident', {})
+    usuarios[str(user_id)] = {
+        'nome': ident.get('nome', ''),
+        'sobrenome': ident.get('sobrenome', ''),
+        'regiao': regiao,
+        'telegram': update.message.from_user.username or update.message.from_user.first_name
+    }
+    salvar_usuarios(usuarios)
+    keyboard = [
+        [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
+        [InlineKeyboardButton("🔍 Consultar SA", callback_data='consultar')],
+        [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
+        [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        '✅ Perfil salvo!\n\nAgora você pode usar o menu:',
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    context.user_data.pop('ident', None)
+    return ConversationHandler.END
 
 # Menu de relatórios
 async def menu_relatorios(query):
@@ -347,13 +403,19 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     
     dados = carregar_dados()
+    usuarios = carregar_usuarios()
+    uid = str(update.message.from_user.id)
+    perfil = usuarios.get(uid)
+    tecnico_nome = (f"{perfil.get('nome','')} {perfil.get('sobrenome','')}".strip() if perfil else (update.message.from_user.username or update.message.from_user.first_name))
+    tecnico_regiao = (perfil.get('regiao') if perfil else None)
     
     nova_instalacao = {
         'sa': context.user_data['sa'],
         'gpon': context.user_data['gpon'],
         'fotos': context.user_data.get('fotos', []),
         'tecnico_id': update.message.from_user.id,
-        'tecnico_nome': update.message.from_user.username or update.message.from_user.first_name,
+        'tecnico_nome': tecnico_nome,
+        'tecnico_regiao': tecnico_regiao,
         'data': datetime.now().strftime('%d/%m/%Y %H:%M')
     }
     
@@ -366,6 +428,7 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f'🔌 GPON: `{nova_instalacao["gpon"]}`\n'
         f'📸 Fotos: {len(nova_instalacao["fotos"])}\n'
         f'👤 Técnico: {nova_instalacao["tecnico_nome"]}\n'
+        f'📍 Região: {nova_instalacao["tecnico_regiao"] or "não informada"}\n'
         f'📅 Data: {nova_instalacao["data"]}\n\n'
         'Use /start para nova ação.',
         parse_mode='Markdown'
@@ -516,7 +579,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
     
     conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button_callback)],
+        entry_points=[CommandHandler('start', start), CallbackQueryHandler(button_callback)],
         states={
             AGUARDANDO_SA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_sa)],
             AGUARDANDO_GPON: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_gpon)],
@@ -526,16 +589,17 @@ def main():
             ],
             AGUARDANDO_DATA_INICIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_data_inicio)],
             AGUARDANDO_DATA_FIM: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_data_fim)],
+            AGUARDANDO_NOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nome)],
+            AGUARDANDO_SOBRENOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_sobrenome)],
+            AGUARDANDO_REGIAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_regiao)],
         },
         fallbacks=[CommandHandler('cancelar', cancelar)]
     )
     
-    app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('mensal', comando_mensal))
     app.add_handler(CommandHandler('semanal', comando_semanal))
     app.add_handler(CommandHandler('hoje', comando_hoje))
     app.add_handler(conv_handler)
-    app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, consultar))
     
     base_url = os.getenv("WEBHOOK_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL")
