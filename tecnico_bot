@@ -488,21 +488,30 @@ async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Configurar o bot
 def main():
+    def _clean_token(s: str):
+        s = s.strip()
+        for ch in ('`', '"', "'", '\r', '\n'):
+            s = s.replace(ch, '')
+        return s
+
     def _get_token():
         t = os.getenv("TELEGRAM_TOKEN")
         if t:
-            return t.strip()
+            return _clean_token(t)
         for p in ("/etc/secrets/TELEGRAM_TOKEN", "TELEGRAM_TOKEN"):
             try:
                 if os.path.exists(p):
                     with open(p, "r", encoding="utf-8") as f:
-                        c = f.read().strip()
+                        c = _clean_token(f.read())
                         if c:
                             return c
             except:
                 pass
         raise RuntimeError("TELEGRAM_TOKEN não definido nas variáveis de ambiente ou secret file")
     TOKEN = _get_token()
+    import re
+    if not re.match(r"^\d+:[A-Za-z0-9_-]+$", TOKEN):
+        raise RuntimeError("TELEGRAM_TOKEN inválido. Verifique se copiou exatamente o token do @BotFather.")
     
     app = Application.builder().token(TOKEN).build()
     
@@ -518,8 +527,6 @@ def main():
             AGUARDANDO_DATA_INICIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_data_inicio)],
             AGUARDANDO_DATA_FIM: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_data_fim)],
         },
-        per_message=True,
-        allow_reentry=True,
         fallbacks=[CommandHandler('cancelar', cancelar)]
     )
     
