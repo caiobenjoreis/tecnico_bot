@@ -1,15 +1,18 @@
 import os
 import json
+import re
 from datetime import datetime, timedelta
 from collections import defaultdict
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters, ContextTypes
 
 # Estados da conversa
-AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM = range(5)
+AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO = range(8)
 
 # Arquivo para salvar os dados
 DADOS_FILE = 'instalacoes.json'
+USUARIOS_FILE = 'usuarios.json'
+REGIOES_SUPORTADAS = ['Norte', 'Nordeste', 'Centro-Oeste', 'Sudeste', 'Sul']
 
 # Carregar dados existentes
 def carregar_dados():
@@ -18,6 +21,19 @@ def carregar_dados():
             return json.load(f)
     return []
 
+def carregar_usuarios():
+    if os.path.exists(USUARIOS_FILE):
+        with open(USUARIOS_FILE, 'r', encoding='utf-8') as f:
+            try:
+                return json.load(f)
+            except:
+                return {}
+    return {}
+
+def salvar_usuarios(usuarios):
+    with open(USUARIOS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(usuarios, f, ensure_ascii=False, indent=2)
+
 # Salvar dados
 def salvar_dados(dados):
     with open(DADOS_FILE, 'w', encoding='utf-8') as f:
@@ -25,6 +41,14 @@ def salvar_dados(dados):
 
 # Comando /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    usuarios = carregar_usuarios()
+    uid = update.message.from_user.id
+    if str(uid) not in usuarios:
+        await update.message.reply_text(
+            'Bem-vindo! Antes de continuar, precisamos do seu cadastro.\n\nPor favor, digite seu nome:',
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_NOME
     keyboard = [
         [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
         [InlineKeyboardButton("🔍 Consultar SA", callback_data='consultar')],
@@ -32,13 +56,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
     await update.message.reply_text(
-        '🛠️ *Bot de Registro de Instalações*\n\n'
-        'Bem-vindo! Escolha uma opção:',
+        '🛠️ *Bot de Registro de Instalações*\n\nBem-vindo! Escolha uma opção:',
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
+    return None
 
 # Menu de relatórios
 async def menu_relatorios(query):
@@ -210,6 +233,43 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
+    if query.data == 'conf_perfil_confirmar':
+        usuarios = carregar_usuarios()
+        uid = query.from_user.id
+        nome = context.user_data.get('registro_nome')
+        sobrenome = context.user_data.get('registro_sobrenome')
+        regiao = context.user_data.get('registro_regiao')
+        if nome and sobrenome and regiao:
+            usuarios[str(uid)] = {
+                'nome': nome,
+                'sobrenome': sobrenome,
+                'regiao': regiao
+            }
+            salvar_usuarios(usuarios)
+            context.user_data.pop('registro_nome', None)
+            context.user_data.pop('registro_sobrenome', None)
+            context.user_data.pop('registro_regiao', None)
+            keyboard = [
+                [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
+                [InlineKeyboardButton("🔍 Consultar SA", callback_data='consultar')],
+                [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
+                [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(
+                'Cadastro concluído. Escolha uma opção:',
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        return ConversationHandler.END
+    
+    if query.data == 'conf_perfil_cancelar':
+        await query.edit_message_text('Cadastro cancelado. Use /start para reiniciar.')
+        context.user_data.pop('registro_nome', None)
+        context.user_data.pop('registro_sobrenome', None)
+        context.user_data.pop('registro_regiao', None)
+        return ConversationHandler.END
+    
     if query.data == 'registrar':
         await query.edit_message_text(
             '📝 *Nova Instalação*\n\n'
@@ -347,13 +407,16 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     
     dados = carregar_dados()
+    usuarios = carregar_usuarios()
+    uid = update.message.from_user.id
+    perfil = usuarios.get(str(uid))
     
     nova_instalacao = {
         'sa': context.user_data['sa'],
         'gpon': context.user_data['gpon'],
         'fotos': context.user_data.get('fotos', []),
         'tecnico_id': update.message.from_user.id,
-        'tecnico_nome': update.message.from_user.username or update.message.from_user.first_name,
+        'tecnico_nome': (perfil and f"{perfil['nome']} {perfil['sobrenome']}") or (update.message.from_user.username or update.message.from_user.first_name),
         'data': datetime.now().strftime('%d/%m/%Y %H:%M')
     }
     
@@ -480,6 +543,53 @@ async def receber_data_fim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop('data_inicio', None)
     return ConversationHandler.END
 
+def _nome_valido(txt: str):
+    return bool(re.match(r'^[A-Za-zÀ-ÖØ-öø-ÿ ]{2,40}$', txt))
+
+def _normaliza_regiao(txt: str):
+    return txt.strip().lower().replace('ô', 'o').replace('ó', 'o').replace('é', 'e').replace('á', 'a').replace('í', 'i').replace('ú', 'u')
+
+async def receber_nome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.strip()
+    if not texto or not _nome_valido(texto):
+        await update.message.reply_text('❌ Nome inválido. Digite apenas letras e espaços.')
+        return AGUARDANDO_NOME
+    context.user_data['registro_nome'] = texto
+    await update.message.reply_text('Agora, seu sobrenome:')
+    return AGUARDANDO_SOBRENOME
+
+async def receber_sobrenome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.strip()
+    if not texto or not _nome_valido(texto):
+        await update.message.reply_text('❌ Sobrenome inválido. Digite apenas letras e espaços.')
+        return AGUARDANDO_SOBRENOME
+    context.user_data['registro_sobrenome'] = texto
+    regs = ', '.join(REGIOES_SUPORTADAS)
+    await update.message.reply_text(f'Informe a região onde você atua ({regs}):')
+    return AGUARDANDO_REGIAO
+
+async def receber_regiao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.strip()
+    suportadas_norm = { _normaliza_regiao(r): r for r in REGIOES_SUPORTADAS }
+    chave = _normaliza_regiao(texto)
+    if chave not in suportadas_norm:
+        await update.message.reply_text('❌ Região inválida. Use uma das opções suportadas.')
+        return AGUARDANDO_REGIAO
+    regiao_ok = suportadas_norm[chave]
+    context.user_data['registro_regiao'] = regiao_ok
+    nome = context.user_data.get('registro_nome')
+    sobrenome = context.user_data.get('registro_sobrenome')
+    msg = (
+        f'Confira seus dados:\n\n'
+        f'Nome: {nome}\n'
+        f'Sobrenome: {sobrenome}\n'
+        f'Região: {regiao_ok}\n\n'
+        f'Confirmar?'
+    )
+    kb = [[InlineKeyboardButton('Confirmar', callback_data='conf_perfil_confirmar')], [InlineKeyboardButton('Cancelar', callback_data='conf_perfil_cancelar')]]
+    await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+    return None
+
 # Cancelar operação
 async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('❌ Operação cancelada. Use /start para começar novamente.')
@@ -516,7 +626,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
     
     conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(button_callback)],
+        entry_points=[CallbackQueryHandler(button_callback), CommandHandler('start', start)],
         states={
             AGUARDANDO_SA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_sa)],
             AGUARDANDO_GPON: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_gpon)],
@@ -526,6 +636,9 @@ def main():
             ],
             AGUARDANDO_DATA_INICIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_data_inicio)],
             AGUARDANDO_DATA_FIM: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_data_fim)],
+            AGUARDANDO_NOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nome)],
+            AGUARDANDO_SOBRENOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_sobrenome)],
+            AGUARDANDO_REGIAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_regiao), CallbackQueryHandler(button_callback)],
         },
         fallbacks=[CommandHandler('cancelar', cancelar)]
     )
