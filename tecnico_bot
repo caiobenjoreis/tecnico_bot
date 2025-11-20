@@ -488,7 +488,9 @@ async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Configurar o bot
 def main():
-    TOKEN = os.getenv("TELEGRAM_TOKEN") or "8573635884:AAEpFdZLTGUD-s8BkYczG1ZWmoPS-c7Dikk"
+    TOKEN = os.getenv("TELEGRAM_TOKEN")
+    if not TOKEN:
+        raise RuntimeError("TELEGRAM_TOKEN não definido nas variáveis de ambiente")
     
     app = Application.builder().token(TOKEN).build()
     
@@ -504,6 +506,8 @@ def main():
             AGUARDANDO_DATA_INICIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_data_inicio)],
             AGUARDANDO_DATA_FIM: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_data_fim)],
         },
+        per_message=True,
+        allow_reentry=True,
         fallbacks=[CommandHandler('cancelar', cancelar)]
     )
     
@@ -512,6 +516,7 @@ def main():
     app.add_handler(CommandHandler('semanal', comando_semanal))
     app.add_handler(CommandHandler('hoje', comando_hoje))
     app.add_handler(conv_handler)
+    app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, consultar))
     
     base_url = os.getenv("WEBHOOK_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL")
