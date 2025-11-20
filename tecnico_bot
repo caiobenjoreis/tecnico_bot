@@ -446,6 +446,46 @@ async def comando_hoje(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = gerar_relatorio_hoje()
     await update.message.reply_text(msg, parse_mode='Markdown')
 
+async def receber_nome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['cad_nome'] = update.message.text.strip()
+    await update.message.reply_text('Agora digite seu *sobrenome*:', parse_mode='Markdown')
+    return AGUARDANDO_SOBRENOME
+
+async def receber_sobrenome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['cad_sobrenome'] = update.message.text.strip()
+    await update.message.reply_text('Por fim, digite a *região* onde atua:', parse_mode='Markdown')
+    return AGUARDANDO_REGIAO
+
+async def receber_regiao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    regiao = update.message.text.strip()
+    usuarios = carregar_usuarios()
+    user = update.message.from_user
+    novo = {
+        'id': user.id,
+        'nome': context.user_data.get('cad_nome', ''),
+        'sobrenome': context.user_data.get('cad_sobrenome', ''),
+        'regiao': regiao,
+        'username': user.username or '',
+        'created_at': datetime.now().strftime('%d/%m/%Y %H:%M')
+    }
+    usuarios = [u for u in usuarios if u.get('id') != user.id] + [novo]
+    salvar_usuarios(usuarios)
+    context.user_data.pop('cad_nome', None)
+    context.user_data.pop('cad_sobrenome', None)
+    keyboard = [
+        [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
+        [InlineKeyboardButton("🔍 Consultar SA", callback_data='consultar')],
+        [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
+        [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        f'✅ Cadastro concluído! Bem-vindo, {novo["nome"]} {novo["sobrenome"]} ({novo["regiao"]}).\n\nEscolha uma opção:',
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
+
 async def receber_data_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
     try:
