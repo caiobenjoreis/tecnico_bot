@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from supabase import create_client, Client
 
 # Estados da conversa
-AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO = range(8)
+AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO, AGUARDANDO_CONSULTA = range(9)
 
 # Arquivo para salvar os dados
 DADOS_FILE = 'instalacoes.json'
@@ -116,7 +116,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AGUARDANDO_NOME
     keyboard = [
         [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
-        [InlineKeyboardButton("🔍 Consultar GPON", callback_data='consultar')],
+        [InlineKeyboardButton("🔍 Consultar SA/GPON", callback_data='consultar')],
         [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
         [InlineKeyboardButton("📆 Consulta Produção", callback_data='consulta_producao')],
         [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
@@ -157,7 +157,7 @@ async def receber_regiao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     salvar_usuario(str(user_id), dados_usuario)
     keyboard = [
         [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
-        [InlineKeyboardButton("🔍 Consultar SA", callback_data='consultar')],
+        [InlineKeyboardButton("🔍 Consultar SA/GPON", callback_data='consultar')],
         [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
         [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
     ]
@@ -351,10 +351,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'consultar':
         await query.edit_message_text(
             '🔍 *Consultar Instalação*\n\n'
-            'Digite o número do GPON para buscar:',
+            'Digite o número da SA ou do GPON para buscar:',
             parse_mode='Markdown'
         )
-        return None
+        return AGUARDANDO_CONSULTA
 
     elif query.data == 'consulta_producao':
         context.user_data['modo'] = 'producao'
@@ -417,7 +417,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'voltar':
         keyboard = [
             [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
-            [InlineKeyboardButton("🔍 Consultar GPON", callback_data='consultar')],
+            [InlineKeyboardButton("🔍 Consultar SA/GPON", callback_data='consultar')],
             [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
             [InlineKeyboardButton("📆 Consulta Produção", callback_data='consulta_producao')],
             [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
@@ -518,37 +518,52 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# Consultar por SA
+# Consultar instalação por SA ou GPON
 async def consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    gpon_busca = update.message.text.strip()
+    texto_busca = update.message.text.strip()
     dados = carregar_dados()
-    
-    resultados = [d for d in dados if gpon_busca.lower() in d['gpon'].lower()]
-    
+
+    termo = texto_busca.lower()
+    resultados = []
+    for d in dados:
+        sa = str(d.get('sa') or '').lower()
+        gpon = str(d.get('gpon') or '').lower()
+        if termo in sa or termo in gpon:
+            resultados.append(d)
+
     if not resultados:
         await update.message.reply_text(
-            f'❌ Nenhuma instalação encontrada para GPON: `{gpon_busca}`',
+            f'❌ Nenhuma instalação encontrada para: `{texto_busca}`',
             parse_mode='Markdown'
         )
-        return
-    
+        return ConversationHandler.END
+
     for resultado in resultados:
         msg = (
             f'📋 *SA:* `{resultado["sa"]}`\n'
             f'🔌 *GPON:* `{resultado["gpon"]}`\n'
-            f'👤 *Técnico:* {resultado["tecnico_nome"]}\n'
-            f'📅 *Data:* {resultado["data"]}\n'
-            f'📸 *Fotos:* {len(resultado["fotos"])}'
+            f'👤 *Técnico:* {resultado["tecnico_nome"]}`\n'
+            f'📅 *Data:* {resultado["data"]}`\n'
+            f'📸 *Fotos:* {len(resultado.get("fotos", []))}'
         )
         
         await update.message.reply_text(msg, parse_mode='Markdown')
         
         # Enviar as fotos
-        for foto_id in resultado['fotos']:
+        for foto_id in resultado.get('fotos', []):
             try:
                 await update.message.reply_photo(photo=foto_id)
             except:
                 pass
+    return ConversationHandler.END
+
+async def comando_consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        '🔍 *Consultar Instalação*\n\n'
+        'Digite o número da SA ou do GPON para buscar:',
+        parse_mode='Markdown'
+    )
+    return AGUARDANDO_CONSULTA
 
 # Comando /mensal (atalho direto)
 async def comando_mensal(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -686,7 +701,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
     
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start), CommandHandler('producao', iniciar_producao), CallbackQueryHandler(button_callback)],
+        entry_points=[CommandHandler('start', start), CommandHandler('producao', iniciar_producao), CommandHandler('consultar', comando_consultar), CallbackQueryHandler(button_callback)],
         states={
             AGUARDANDO_SA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_sa)],
             AGUARDANDO_GPON: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_gpon)],
@@ -699,6 +714,7 @@ def main():
             AGUARDANDO_NOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nome)],
             AGUARDANDO_SOBRENOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_sobrenome)],
             AGUARDANDO_REGIAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_regiao)],
+            AGUARDANDO_CONSULTA: [MessageHandler(filters.TEXT & ~filters.COMMAND, consultar)],
         },
         fallbacks=[CommandHandler('cancelar', cancelar)]
     )
@@ -707,7 +723,6 @@ def main():
     app.add_handler(CommandHandler('semanal', comando_semanal))
     app.add_handler(CommandHandler('hoje', comando_hoje))
     app.add_handler(conv_handler)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, consultar))
     
     base_url = os.getenv("WEBHOOK_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL")
     if base_url:
