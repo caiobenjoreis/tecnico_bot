@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from supabase import create_client, Client
 
 # Estados da conversa
-AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO, AGUARDANDO_CONSULTA = range(9)
+AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_TIPO, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO, AGUARDANDO_CONSULTA = range(10)
 
 # Arquivo para salvar os dados
 DADOS_FILE = 'instalacoes.json'
@@ -19,6 +19,101 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 USE_SUPABASE = bool(SUPABASE_URL and SUPABASE_KEY)
 _SUPABASE_CLIENT = None
+
+PONTOS_SERVICO = {
+    'defeito_banda_larga': 1.43,
+    'defeito_linha': 1.43,
+    'defeito_tv': 1.43,
+    'instalacao': 2.28,
+    'instalacao_tv': 3.58,
+    'mudanca_endereco': 2.37,
+    'retirada': 1.06,
+    'servicos': 1.50,
+    'servico': 1.50
+}
+
+TABELA_FAIXAS = [
+    {'min': 164.0, 'max': float('inf'), 'faixa': 'A', 'valor': 3.20, 'valor_turbo': 8.00},
+    {'min': 159.0, 'max': 163.99, 'faixa': 'B', 'valor': 2.40, 'valor_turbo': 6.00},
+    {'min': 148.0, 'max': 158.99, 'faixa': 'C', 'valor': 1.60, 'valor_turbo': 4.00},
+    {'min': 137.0, 'max': 147.99, 'faixa': 'D', 'valor': 1.00, 'valor_turbo': 2.50},
+    {'min': 126.0, 'max': 136.99, 'faixa': 'E', 'valor': 0.80, 'valor_turbo': 2.25},
+    {'min': 120.0, 'max': 125.99, 'faixa': 'F', 'valor': 0.70, 'valor_turbo': 2.00},
+    {'min': 115.0, 'max': 119.99, 'faixa': 'G', 'valor': 0.70, 'valor_turbo': 1.75},
+    {'min': 109.0, 'max': 114.99, 'faixa': 'H', 'valor': 0.60, 'valor_turbo': 1.50},
+    {'min': 0.0,   'max': 108.99, 'faixa': 'I', 'valor': 0.00, 'valor_turbo': 0.00}
+]
+
+def _formata_brl(v: float) -> str:
+    s = f"{v:,.2f}"
+    s = s.replace(',', 'X').replace('.', ',').replace('X', '.')
+    return f"R$ {s}"
+
+def calcular_pontos(instalacoes: list) -> float:
+    total = 0.0
+    for inst in instalacoes:
+        tipo = str(inst.get('tipo') or 'instalacao').lower()
+        total += PONTOS_SERVICO.get(tipo, 1.0)
+    return total
+
+def contar_dias_produtivos(instalacoes: list) -> int:
+    dias = set()
+    for inst in instalacoes:
+        try:
+            dt = datetime.strptime(inst['data'], '%d/%m/%Y %H:%M')
+            dias.add(dt.date())
+        except:
+            continue
+    return len(dias)
+
+def obter_faixa_valor(pontos: float):
+    p = float(pontos)
+    for tier in TABELA_FAIXAS:
+        if tier['min'] <= p <= tier['max']:
+            return tier
+    return TABELA_FAIXAS[-1]
+
+def ciclo_atual():
+    agora = datetime.now(TZ)
+    if agora.day >= 16:
+        inicio = datetime(agora.year, agora.month, 16, tzinfo=TZ)
+        ano = agora.year + 1 if agora.month == 12 else agora.year
+        mes = 1 if agora.month == 12 else agora.month + 1
+        fim = datetime(ano, mes, 15, 23, 59, tzinfo=TZ)
+    else:
+        ano_prev = agora.year - 1 if agora.month == 1 else agora.year
+        mes_prev = 12 if agora.month == 1 else agora.month - 1
+        inicio = datetime(ano_prev, mes_prev, 16, tzinfo=TZ)
+        fim = datetime(agora.year, agora.month, 15, 23, 59, tzinfo=TZ)
+    return inicio, fim
+
+def montar_msg_producao(instalacoes_user: list, inicio: datetime, fim: datetime, username: str):
+    dias_periodo = (fim - inicio).days + 1
+    media_dia = len(instalacoes_user) / dias_periodo if dias_periodo > 0 else 0
+    pontos = calcular_pontos(instalacoes_user)
+    dias_produtivos = contar_dias_produtivos(instalacoes_user)
+    turbo_ativo = dias_produtivos >= 24
+    tier = obter_faixa_valor(pontos)
+    valor_unit = tier['valor_turbo'] if turbo_ativo else tier['valor']
+    valor_total = pontos * valor_unit
+    min_sem_turbo = _formata_brl(tier['min'] * tier['valor'])
+    min_com_turbo = _formata_brl(tier['min'] * tier['valor_turbo'])
+    msg = (
+        f'📆 *Produção no Período*\n'
+        f'Período: {inicio.strftime("%d/%m/%Y")} a {fim.strftime("%d/%m/%Y")}\n'
+        f'👤 Técnico: {username}\n\n'
+        f'📊 *Total de Instalações:* {len(instalacoes_user)}\n'
+        f'🔢 *Pontos:* {int(pontos)}\n'
+        f'🏷️ *Faixa:* {tier["faixa"]}\n'
+        f'📅 *Dias produtivos:* {dias_produtivos} (>=24 ativa Turbo)\n'
+        f'⚡ *Modo Turbo:* {"Ativo" if turbo_ativo else "Inativo"}\n'
+        f'💵 *Valor por ponto:* {_formata_brl(valor_unit)}\n'
+        f'💰 *Valor total:* {_formata_brl(valor_total)}\n'
+        f'🔻 *Mínimo na faixa (s/ Turbo):* {min_sem_turbo}\n'
+        f'🔺 *Mínimo na faixa (c/ Turbo):* {min_com_turbo}\n'
+        f'📈 *Média diária:* {media_dia:.1f} instalações/dia\n'
+    )
+    return msg
 
 def get_supabase():
     global _SUPABASE_CLIENT
@@ -116,7 +211,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AGUARDANDO_NOME
     keyboard = [
         [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
-        [InlineKeyboardButton("🔍 Consultar SA/GPON", callback_data='consultar')],
+        [InlineKeyboardButton("� Registrar Reparo", callback_data='registrar_reparo')],
+        [InlineKeyboardButton("� Consultar SA/GPON", callback_data='consultar')],
         [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
         [InlineKeyboardButton("📆 Consulta Produção", callback_data='consulta_producao')],
         [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
@@ -157,7 +253,8 @@ async def receber_regiao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     salvar_usuario(str(user_id), dados_usuario)
     keyboard = [
         [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
-        [InlineKeyboardButton("🔍 Consultar SA/GPON", callback_data='consultar')],
+        [InlineKeyboardButton("� Registrar Reparo", callback_data='registrar_reparo')],
+        [InlineKeyboardButton("� Consultar SA/GPON", callback_data='consultar')],
         [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
         [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
     ]
@@ -341,9 +438,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     if query.data == 'registrar':
+        context.user_data['modo_registro'] = 'instalacao'
         await query.edit_message_text(
             '📝 *Nova Instalação*\n\n'
             'Por favor, envie o *número da SA*:',
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_SA
+    
+    elif query.data == 'registrar_reparo':
+        context.user_data['modo_registro'] = 'reparo'
+        await query.edit_message_text(
+            '🔧 *Novo Reparo*\n\n'
+            'Por favor, envie o *número da SA/OS*:',
             parse_mode='Markdown'
         )
         return AGUARDANDO_SA
@@ -357,12 +464,25 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AGUARDANDO_CONSULTA
 
     elif query.data == 'consulta_producao':
-        context.user_data['modo'] = 'producao'
-        await query.edit_message_text(
-            '📆 *Consulta Produção*\n\nEnvie a *data inicial* no formato `dd/mm/aaaa`:',
-            parse_mode='Markdown'
-        )
-        return AGUARDANDO_DATA_INICIO
+        dados = carregar_dados()
+        user_id = query.from_user.id
+        username = query.from_user.username or query.from_user.first_name
+        inicio_dt, fim_dt = ciclo_atual()
+        instalacoes_user = []
+        for d in dados:
+            try:
+                data_inst = datetime.strptime(d['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
+                if d.get('tecnico_id') == user_id and inicio_dt <= data_inst <= fim_dt:
+                    instalacoes_user.append(d)
+            except:
+                continue
+        if not instalacoes_user:
+            msg = f'❌ Nenhuma instalação entre {inicio_dt.strftime("%d/%m/%Y")} e {fim_dt.strftime("%d/%m/%Y")}.'
+            await query.edit_message_text(msg, parse_mode='Markdown')
+            return None
+        msg = montar_msg_producao(instalacoes_user, inicio_dt, fim_dt, username)
+        await query.edit_message_text(msg, parse_mode='Markdown')
+        return None
     
     elif query.data == 'minhas':
         dados = carregar_dados()
@@ -417,7 +537,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'voltar':
         keyboard = [
             [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
-            [InlineKeyboardButton("🔍 Consultar SA/GPON", callback_data='consultar')],
+            [InlineKeyboardButton("� Registrar Reparo", callback_data='registrar_reparo')],
+            [InlineKeyboardButton("�� Consultar SA/GPON", callback_data='consultar')],
             [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
             [InlineKeyboardButton("📆 Consulta Produção", callback_data='consulta_producao')],
             [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
@@ -445,14 +566,28 @@ async def receber_sa(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receber_gpon(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['gpon'] = update.message.text.strip()
     context.user_data['fotos'] = []
-    
-    await update.message.reply_text(
-        '✅ GPON registrado!\n\n'
-        '📸 Agora envie as *3 fotos* da instalação.\n'
-        'Quando terminar, digite /finalizar',
-        parse_mode='Markdown'
-    )
-    return AGUARDANDO_FOTOS
+    modo = context.user_data.get('modo_registro') or 'instalacao'
+    if modo == 'reparo':
+        keyboard = [
+            [InlineKeyboardButton('Defeito Banda Larga', callback_data='defeito_banda_larga')],
+            [InlineKeyboardButton('Defeito Linha', callback_data='defeito_linha')],
+            [InlineKeyboardButton('Defeito TV', callback_data='defeito_tv')],
+            [InlineKeyboardButton('Mudança de Endereço', callback_data='mudanca_endereco')],
+            [InlineKeyboardButton('Retirada', callback_data='retirada')],
+            [InlineKeyboardButton('Serviços', callback_data='servicos')]
+        ]
+        prompt = '✅ GPON registrado!\n\nSelecione o *tipo de reparo*:'
+    else:
+        keyboard = [
+            [InlineKeyboardButton('Instalação', callback_data='instalacao')],
+            [InlineKeyboardButton('Instalação TV', callback_data='instalacao_tv')],
+            [InlineKeyboardButton('Mudança de Endereço', callback_data='mudanca_endereco')],
+            [InlineKeyboardButton('Serviços', callback_data='servicos')]
+        ]
+        prompt = '✅ GPON registrado!\n\nSelecione o *tipo de serviço*:'
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(prompt, reply_markup=reply_markup, parse_mode='Markdown')
+    return AGUARDANDO_TIPO
 
 # Receber fotos
 async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -479,6 +614,19 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return AGUARDANDO_FOTOS
 
+async def receber_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    tipo = query.data
+    context.user_data['tipo'] = tipo
+    await query.edit_message_text(
+        '✅ Tipo selecionado!\n\n'
+        '📸 Agora envie as *3 fotos* da instalação.\n'
+        'Quando terminar, digite /finalizar',
+        parse_mode='Markdown'
+    )
+    return AGUARDANDO_FOTOS
+
 # Finalizar registro
 async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'sa' not in context.user_data or 'gpon' not in context.user_data:
@@ -494,6 +642,8 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nova_instalacao = {
         'sa': context.user_data['sa'],
         'gpon': context.user_data['gpon'],
+        'tipo': context.user_data.get('tipo') or 'instalacao',
+        'categoria': context.user_data.get('modo_registro') or 'instalacao',
         'fotos': context.user_data.get('fotos', []),
         'tecnico_id': update.message.from_user.id,
         'tecnico_nome': tecnico_nome,
@@ -507,6 +657,8 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '✅ *Instalação registrada com sucesso!*\n\n'
         f'📋 SA: `{nova_instalacao["sa"]}`\n'
         f'🔌 GPON: `{nova_instalacao["gpon"]}`\n'
+        f'🧩 Tipo: {nova_instalacao["tipo"]}\n'
+        f'🗂️ Categoria: {nova_instalacao["categoria"]}\n'
         f'📸 Fotos: {len(nova_instalacao["fotos"])}\n'
         f'👤 Técnico: {nova_instalacao["tecnico_nome"]}\n'
         f'📍 Região: {nova_instalacao["tecnico_regiao"] or "não informada"}\n'
@@ -542,6 +694,7 @@ async def consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = (
             f'📋 *SA:* `{resultado["sa"]}`\n'
             f'🔌 *GPON:* `{resultado["gpon"]}`\n'
+            f'🧩 *Tipo:* {resultado.get("tipo", "instalacao")}\n'
             f'👤 *Técnico:* {resultado["tecnico_nome"]}`\n'
             f'📅 *Data:* {resultado["data"]}`\n'
             f'📸 *Fotos:* {len(resultado.get("fotos", []))}'
@@ -596,9 +749,25 @@ async def receber_data_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE
     return AGUARDANDO_DATA_FIM
 
 async def iniciar_producao(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['modo'] = 'producao'
-    await update.message.reply_text('📆 *Consulta Produção*\n\nEnvie a *data inicial* no formato `dd/mm/aaaa`:', parse_mode='Markdown')
-    return AGUARDANDO_DATA_INICIO
+    dados = carregar_dados()
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username or update.message.from_user.first_name
+    inicio_dt, fim_dt = ciclo_atual()
+    instalacoes_user = []
+    for d in dados:
+        try:
+            data_inst = datetime.strptime(d['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
+            if d.get('tecnico_id') == user_id and inicio_dt <= data_inst <= fim_dt:
+                instalacoes_user.append(d)
+        except:
+            continue
+    if not instalacoes_user:
+        msg = f'❌ Nenhuma instalação entre {inicio_dt.strftime("%d/%m/%Y")} e {fim_dt.strftime("%d/%m/%Y")}.'
+        await update.message.reply_text(msg, parse_mode='Markdown')
+        return ConversationHandler.END
+    msg = montar_msg_producao(instalacoes_user, inicio_dt, fim_dt, username)
+    await update.message.reply_text(msg, parse_mode='Markdown')
+    return ConversationHandler.END
 
 async def receber_data_fim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
@@ -637,11 +806,23 @@ async def receber_data_fim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if modo == 'producao':
         dias_periodo = (fim_dt - inicio_dt).days + 1
         media_dia = len(instalacoes_user) / dias_periodo if dias_periodo > 0 else 0
+        pontos = calcular_pontos(instalacoes_user)
+        dias_produtivos = contar_dias_produtivos(instalacoes_user)
+        turbo_ativo = dias_produtivos >= 24
+        tier = obter_faixa_valor(pontos)
+        valor_unit = tier['valor_turbo'] if turbo_ativo else tier['valor']
+        valor_total = pontos * valor_unit
         msg = (
             f'📆 *Produção no Período*\n'
             f'Período: {inicio.strftime("%d/%m/%Y")} a {fim.strftime("%d/%m/%Y")}\n'
             f'👤 Técnico: {username}\n\n'
             f'📊 *Total de Instalações:* {len(instalacoes_user)}\n'
+            f'🔢 *Pontos:* {int(pontos)}\n'
+            f'🏷️ *Faixa:* {tier["faixa"]}\n'
+            f'📅 *Dias produtivos:* {dias_produtivos} (>=24 ativa Turbo)\n'
+            f'⚡ *Modo Turbo:* {"Ativo" if turbo_ativo else "Inativo"}\n'
+            f'💵 *Valor por ponto:* {_formata_brl(valor_unit)}\n'
+            f'💰 *Valor total:* {_formata_brl(valor_total)}\n'
             f'📈 *Média diária:* {media_dia:.1f} instalações/dia\n'
         )
         await update.message.reply_text(msg, parse_mode='Markdown')
@@ -701,10 +882,11 @@ def main():
     app = Application.builder().token(TOKEN).build()
     
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start), CommandHandler('producao', iniciar_producao), CommandHandler('consultar', comando_consultar), CallbackQueryHandler(button_callback)],
+        entry_points=[CommandHandler('start', start), CommandHandler('producao', iniciar_producao), CommandHandler('consultar', comando_consultar), CommandHandler('reparo', comando_reparo), CallbackQueryHandler(button_callback)],
         states={
             AGUARDANDO_SA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_sa)],
             AGUARDANDO_GPON: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_gpon)],
+            AGUARDANDO_TIPO: [CallbackQueryHandler(receber_tipo)],
             AGUARDANDO_FOTOS: [
                 MessageHandler(filters.PHOTO, receber_foto),
                 CommandHandler('finalizar', finalizar)
@@ -737,3 +919,10 @@ def main():
 
 if __name__ == '__main__':
     main()
+async def comando_reparo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['modo_registro'] = 'reparo'
+    await update.message.reply_text(
+        '🔧 *Novo Reparo*\n\nEnvie o *número da SA/OS*:',
+        parse_mode='Markdown'
+    )
+    return AGUARDANDO_SA
