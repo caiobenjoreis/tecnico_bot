@@ -733,6 +733,14 @@ async def comando_hoje(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = gerar_relatorio_hoje()
     await update.message.reply_text(msg, parse_mode='Markdown')
 
+async def comando_reparo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['modo_registro'] = 'reparo'
+    await update.message.reply_text(
+        '🔧 *Novo Reparo*\n\nEnvie o *número da SA/OS*:',
+        parse_mode='Markdown'
+    )
+    return AGUARDANDO_SA
+
 async def receber_data_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
     try:
@@ -919,10 +927,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-async def comando_reparo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['modo_registro'] = 'reparo'
-    await update.message.reply_text(
-        '🔧 *Novo Reparo*\n\nEnvie o *número da SA/OS*:',
-        parse_mode='Markdown'
-    )
-    return AGUARDANDO_SA
