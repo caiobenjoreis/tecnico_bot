@@ -115,6 +115,18 @@ def montar_msg_producao(instalacoes_user: list, inicio: datetime, fim: datetime,
     )
     return msg
 
+def _parse_inst_data(value: str):
+    try:
+        return datetime.strptime(value, '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
+    except:
+        try:
+            v = str(value or '').strip()
+            if v.endswith('Z'):
+                v = v[:-1] + '+00:00'
+            return datetime.fromisoformat(v).astimezone(TZ)
+        except:
+            return None
+
 def get_supabase():
     global _SUPABASE_CLIENT
     if not USE_SUPABASE:
@@ -770,8 +782,11 @@ async def receber_data_fim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     instalacoes_user = []
     for d in dados:
         try:
-            data_inst = datetime.strptime(d['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
-            if d.get('tecnico_id') == user_id and inicio_dt <= data_inst <= fim_dt:
+            raw_dt = d.get('data') or d.get('created_at')
+            data_inst = _parse_inst_data(raw_dt)
+            if data_inst is None:
+                continue
+            if str(d.get('tecnico_id')) == str(user_id) and inicio_dt <= data_inst <= fim_dt:
                 instalacoes_user.append(d)
         except:
             continue
