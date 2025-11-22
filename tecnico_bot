@@ -115,18 +115,6 @@ def montar_msg_producao(instalacoes_user: list, inicio: datetime, fim: datetime,
     )
     return msg
 
-def _parse_inst_data(value: str):
-    try:
-        return datetime.strptime(value, '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
-    except:
-        try:
-            v = str(value or '').strip()
-            if v.endswith('Z'):
-                v = v[:-1] + '+00:00'
-            return datetime.fromisoformat(v).astimezone(TZ)
-        except:
-            return None
-
 def get_supabase():
     global _SUPABASE_CLIENT
     if not USE_SUPABASE:
@@ -223,8 +211,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AGUARDANDO_NOME
     keyboard = [
         [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
-        [InlineKeyboardButton("🛠️ Registrar Reparo", callback_data='registrar_reparo')],
-        [InlineKeyboardButton("🔎 Consultar SA/GPON", callback_data='consultar')],
+        [InlineKeyboardButton("� Registrar Reparo", callback_data='registrar_reparo')],
+        [InlineKeyboardButton("� Consultar SA/GPON", callback_data='consultar')],
         [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
         [InlineKeyboardButton("📆 Consulta Produção", callback_data='consulta_producao')],
         [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
@@ -476,12 +464,25 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AGUARDANDO_CONSULTA
 
     elif query.data == 'consulta_producao':
-        context.user_data['modo'] = 'producao'
-        await query.edit_message_text(
-            '📆 *Consulta Produção*\n\nEnvie a *data inicial* no formato `dd/mm/aaaa`:',
-            parse_mode='Markdown'
-        )
-        return AGUARDANDO_DATA_INICIO
+        dados = carregar_dados()
+        user_id = query.from_user.id
+        username = query.from_user.username or query.from_user.first_name
+        inicio_dt, fim_dt = ciclo_atual()
+        instalacoes_user = []
+        for d in dados:
+            try:
+                data_inst = datetime.strptime(d['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
+                if d.get('tecnico_id') == user_id and inicio_dt <= data_inst <= fim_dt:
+                    instalacoes_user.append(d)
+            except:
+                continue
+        if not instalacoes_user:
+            msg = f'❌ Nenhuma instalação entre {inicio_dt.strftime("%d/%m/%Y")} e {fim_dt.strftime("%d/%m/%Y")}.'
+            await query.edit_message_text(msg, parse_mode='Markdown')
+            return None
+        msg = montar_msg_producao(instalacoes_user, inicio_dt, fim_dt, username)
+        await query.edit_message_text(msg, parse_mode='Markdown')
+        return None
     
     elif query.data == 'minhas':
         dados = carregar_dados()
@@ -735,7 +736,7 @@ async def comando_hoje(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def comando_reparo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['modo_registro'] = 'reparo'
     await update.message.reply_text(
-        '🔧 *Novo Reparo*\n\nEnvie o *número da SA/*:',
+        '🔧 *Novo Reparo*\n\nEnvie o *número da SA/OS*:',
         parse_mode='Markdown'
     )
     return AGUARDANDO_SA
@@ -756,9 +757,25 @@ async def receber_data_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE
     return AGUARDANDO_DATA_FIM
 
 async def iniciar_producao(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['modo'] = 'producao'
-    await update.message.reply_text('📆 *Consulta Produção*\n\nEnvie a *data inicial* no formato `dd/mm/aaaa`:', parse_mode='Markdown')
-    return AGUARDANDO_DATA_INICIO
+    dados = carregar_dados()
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username or update.message.from_user.first_name
+    inicio_dt, fim_dt = ciclo_atual()
+    instalacoes_user = []
+    for d in dados:
+        try:
+            data_inst = datetime.strptime(d['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
+            if d.get('tecnico_id') == user_id and inicio_dt <= data_inst <= fim_dt:
+                instalacoes_user.append(d)
+        except:
+            continue
+    if not instalacoes_user:
+        msg = f'❌ Nenhuma instalação entre {inicio_dt.strftime("%d/%m/%Y")} e {fim_dt.strftime("%d/%m/%Y")}.'
+        await update.message.reply_text(msg, parse_mode='Markdown')
+        return ConversationHandler.END
+    msg = montar_msg_producao(instalacoes_user, inicio_dt, fim_dt, username)
+    await update.message.reply_text(msg, parse_mode='Markdown')
+    return ConversationHandler.END
 
 async def receber_data_fim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto = update.message.text.strip()
@@ -782,11 +799,8 @@ async def receber_data_fim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     instalacoes_user = []
     for d in dados:
         try:
-            raw_dt = d.get('data') or d.get('created_at')
-            data_inst = _parse_inst_data(raw_dt)
-            if data_inst is None:
-                continue
-            if str(d.get('tecnico_id')) == str(user_id) and inicio_dt <= data_inst <= fim_dt:
+            data_inst = datetime.strptime(d['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
+            if d.get('tecnico_id') == user_id and inicio_dt <= data_inst <= fim_dt:
                 instalacoes_user.append(d)
         except:
             continue
