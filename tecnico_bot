@@ -942,6 +942,20 @@ def main():
             except:
                 pass
         raise RuntimeError("TELEGRAM_TOKEN não definido nas variáveis de ambiente ou secret file")
+    
+    async def post_init(application: Application) -> None:
+        await application.bot.set_my_commands([
+            BotCommand("start", "Menu principal"),
+            BotCommand("ajuda", "Como usar o bot"),
+            BotCommand("cancelar", "Cancelar operação atual"),
+            BotCommand("mensal", "Relatório mensal"),
+            BotCommand("semanal", "Relatório semanal"),
+            BotCommand("hoje", "Relatório de hoje"),
+            BotCommand("consultar", "Consultar instalação"),
+            BotCommand("reparo", "Registrar reparo"),
+            BotCommand("producao", "Produção por período")
+        ])
+    
     TOKEN = _get_token()
     import re
     if not re.match(r"^\d+:[A-Za-z0-9_-]+$", TOKEN):
@@ -949,7 +963,7 @@ def main():
     if not USE_SUPABASE:
         raise RuntimeError("SUPABASE_URL/SUPABASE_KEY não definidos nas variáveis de ambiente")
     
-    app = Application.builder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).post_init(post_init).build()
     
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start), CommandHandler('producao', iniciar_producao), CommandHandler('consultar', comando_consultar), CommandHandler('reparo', comando_reparo), CallbackQueryHandler(button_callback)],
@@ -984,31 +998,9 @@ def main():
         url_path = TOKEN
         webhook_url = f"{base_url}/{url_path}"
         print('🤖 Bot iniciado (webhook)! Aguardando mensagens...')
-        await app.bot.set_my_commands([
-            BotCommand("start", "Menu principal"),
-            BotCommand("ajuda", "Como usar o bot"),
-            BotCommand("cancelar", "Cancelar operação atual"),
-            BotCommand("mensal", "Relatório mensal"),
-            BotCommand("semanal", "Relatório semanal"),
-            BotCommand("hoje", "Relatório de hoje"),
-            BotCommand("consultar", "Consultar instalação"),
-            BotCommand("reparo", "Registrar reparo"),
-            BotCommand("producao", "Produção por período")
-        ])
         app.run_webhook(listen="0.0.0.0", port=port, url_path=url_path, webhook_url=webhook_url)
     else:
         print('🤖 Bot iniciado (polling)! Aguardando mensagens...')
-        await app.bot.set_my_commands([
-            BotCommand("start", "Menu principal"),
-            BotCommand("ajuda", "Como usar o bot"),
-            BotCommand("cancelar", "Cancelar operação atual"),
-            BotCommand("mensal", "Relatório mensal"),
-            BotCommand("semanal", "Relatório semanal"),
-            BotCommand("hoje", "Relatório de hoje"),
-            BotCommand("consultar", "Consultar instalação"),
-            BotCommand("reparo", "Registrar reparo"),
-            BotCommand("producao", "Produção por período")
-        ])
         app.run_polling()
 
 if __name__ == '__main__':
