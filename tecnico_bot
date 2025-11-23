@@ -3,12 +3,13 @@ import json
 from datetime import datetime, timedelta
 from collections import defaultdict
 from zoneinfo import ZoneInfo
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters, ContextTypes
 from supabase import create_client, Client
 
 # Estados da conversa
-AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_TIPO, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO, AGUARDANDO_CONSULTA = range(10)
+# Estados da conversa
+AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_TIPO, AGUARDANDO_SERIAL, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO, AGUARDANDO_CONSULTA = range(11)
 
 # Arquivo para salvar os dados
 DADOS_FILE = 'instalacoes.json'
@@ -201,352 +202,28 @@ def salvar_instalacao(instalacao: dict):
     except:
         pass
 
+# Comando /ajuda
+async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = (
+        '🆘 *Central de Ajuda*\n\n'
+        'Aqui estão os comandos disponíveis:\n\n'
+        '🔹 /start - Iniciar o bot e ver o menu principal\n'
+        '🔹 /ajuda - Ver esta mensagem de ajuda\n'
+        '🔹 /cancelar - Cancelar a operação atual\n'
+        '🔹 /mensal - Relatório de produção mensal\n'
+        '🔹 /semanal - Relatório de produção semanal\n'
+        '🔹 /hoje - Relatório de produção de hoje\n'
+        '🔹 /consultar - Consultar uma instalação por SA ou GPON\n'
+        '🔹 /reparo - Iniciar registro de reparo rápido\n'
+        '🔹 /producao - Consultar produção por período\n\n'
+        '💡 *Dica:* Se ficar preso em alguma etapa, digite /cancelar para voltar ao início.'
+    )
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
 # Comando /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     usuarios = carregar_usuarios()
-    if str(user_id) not in usuarios:
-        context.user_data['ident'] = {}
-        await update.message.reply_text('👤 Primeiro acesso. Informe seu nome:')
-        return AGUARDANDO_NOME
-    keyboard = [
-        [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
-        [InlineKeyboardButton("� Registrar Reparo", callback_data='registrar_reparo')],
-        [InlineKeyboardButton("� Consultar SA/GPON", callback_data='consultar')],
-        [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
-        [InlineKeyboardButton("📆 Consulta Produção", callback_data='consulta_producao')],
-        [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        '🛠️ *Bot de Registro de Instalações*\n\n'
-        'Bem-vindo! Escolha uma opção:',
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
-    return ConversationHandler.END
-
-async def receber_nome(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.setdefault('ident', {})
-    context.user_data['ident']['nome'] = update.message.text.strip()
-    await update.message.reply_text('Informe seu sobrenome:')
-    return AGUARDANDO_SOBRENOME
-
-async def receber_sobrenome(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.setdefault('ident', {})
-    context.user_data['ident']['sobrenome'] = update.message.text.strip()
-    await update.message.reply_text('Informe sua região de atuação:')
-    return AGUARDANDO_REGIAO
-
-async def receber_regiao(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    regiao = update.message.text.strip()
-    user_id = update.message.from_user.id
-    usuarios = carregar_usuarios()
-    ident = context.user_data.get('ident', {})
-    dados_usuario = {
-        'nome': ident.get('nome', ''),
-        'sobrenome': ident.get('sobrenome', ''),
-        'regiao': regiao,
-        'telegram': update.message.from_user.username or update.message.from_user.first_name
-    }
-    usuarios[str(user_id)] = dados_usuario
-    salvar_usuario(str(user_id), dados_usuario)
-    keyboard = [
-        [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
-        [InlineKeyboardButton("� Registrar Reparo", callback_data='registrar_reparo')],
-        [InlineKeyboardButton("� Consultar SA/GPON", callback_data='consultar')],
-        [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
-        [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        '✅ Perfil salvo!\n\nAgora você pode usar o menu:',
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
-    context.user_data.pop('ident', None)
-    return ConversationHandler.END
-
-# Menu de relatórios
-async def menu_relatorios(query):
-    keyboard = [
-        [InlineKeyboardButton("📅 Relatório Mensal", callback_data='rel_mensal')],
-        [InlineKeyboardButton("📊 Relatório Semanal", callback_data='rel_semanal')],
-        [InlineKeyboardButton("📆 Relatório por Período", callback_data='rel_periodo')],
-        [InlineKeyboardButton("📈 Relatório Hoje", callback_data='rel_hoje')],
-        [InlineKeyboardButton("🏆 Ranking Técnicos", callback_data='rel_ranking')],
-        [InlineKeyboardButton("🔙 Voltar", callback_data='voltar')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        '📈 *Relatórios Disponíveis*\n\n'
-        'Escolha o tipo de relatório:',
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
-
-# Gerar relatório mensal
-def gerar_relatorio_mensal():
-    dados = carregar_dados()
-    agora = datetime.now(TZ)
-    mes_atual = agora.month
-    ano_atual = agora.year
-    
-    # Filtrar instalações do mês atual
-    instalacoes_mes = []
-    for inst in dados:
-        try:
-            data_inst = datetime.strptime(inst['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
-            if data_inst.month == mes_atual and data_inst.year == ano_atual:
-                instalacoes_mes.append(inst)
-        except:
-            continue
-    
-    if not instalacoes_mes:
-        return "❌ Nenhuma instalação registrada neste mês."
-    
-    # Contar por técnico
-    por_tecnico = defaultdict(int)
-    for inst in instalacoes_mes:
-        por_tecnico[inst['tecnico_nome']] += 1
-    
-    # Montar relatório
-    nome_mes = agora.strftime('%B/%Y')
-    msg = f'📅 *Relatório Mensal - {nome_mes}*\n\n'
-    msg += f'📊 *Total de Instalações:* {len(instalacoes_mes)}\n\n'
-    msg += '👥 *Por Técnico:*\n'
-    
-    # Ordenar por quantidade (maior para menor)
-    tecnicos_ordenados = sorted(por_tecnico.items(), key=lambda x: x[1], reverse=True)
-    for tecnico, quantidade in tecnicos_ordenados:
-        msg += f'  • {tecnico}: *{quantidade}* instalações\n'
-    
-    # Média diária
-    dias_mes = agora.day
-    media_dia = len(instalacoes_mes) / dias_mes
-    msg += f'\n📈 *Média diária:* {media_dia:.1f} instalações/dia'
-    
-    return msg
-
-# Gerar relatório semanal
-def gerar_relatorio_semanal():
-    dados = carregar_dados()
-    agora = datetime.now(TZ)
-    inicio_semana = agora - timedelta(days=agora.weekday())
-    inicio_semana = inicio_semana.replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # Filtrar instalações da semana
-    instalacoes_semana = []
-    for inst in dados:
-        try:
-            data_inst = datetime.strptime(inst['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
-            if data_inst >= inicio_semana:
-                instalacoes_semana.append(inst)
-        except:
-            continue
-    
-    if not instalacoes_semana:
-        return "❌ Nenhuma instalação registrada nesta semana."
-    
-    # Contar por técnico
-    por_tecnico = defaultdict(int)
-    for inst in instalacoes_semana:
-        por_tecnico[inst['tecnico_nome']] += 1
-    
-    # Montar relatório
-    msg = f'📊 *Relatório Semanal*\n'
-    msg += f'Período: {inicio_semana.strftime("%d/%m")} até {agora.strftime("%d/%m/%Y")}\n\n'
-    msg += f'📊 *Total de Instalações:* {len(instalacoes_semana)}\n\n'
-    msg += '👥 *Por Técnico:*\n'
-    
-    tecnicos_ordenados = sorted(por_tecnico.items(), key=lambda x: x[1], reverse=True)
-    for tecnico, quantidade in tecnicos_ordenados:
-        msg += f'  • {tecnico}: *{quantidade}* instalações\n'
-    
-    # Média diária da semana
-    dias_semana = (agora - inicio_semana).days + 1
-    media_dia = len(instalacoes_semana) / dias_semana
-    msg += f'\n📈 *Média diária:* {media_dia:.1f} instalações/dia'
-    
-    return msg
-
-# Gerar relatório do dia
-def gerar_relatorio_hoje():
-    dados = carregar_dados()
-    agora = datetime.now(TZ)
-    
-    # Filtrar instalações de hoje
-    instalacoes_hoje = []
-    for inst in dados:
-        try:
-            data_inst = datetime.strptime(inst['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
-            if data_inst.date() == agora.date():
-                instalacoes_hoje.append(inst)
-        except:
-            continue
-    
-    if not instalacoes_hoje:
-        return "❌ Nenhuma instalação registrada hoje."
-    
-    # Contar por técnico
-    por_tecnico = defaultdict(int)
-    for inst in instalacoes_hoje:
-        por_tecnico[inst['tecnico_nome']] += 1
-    
-    # Montar relatório
-    msg = f'📈 *Relatório de Hoje - {agora.strftime("%d/%m/%Y")}*\n\n'
-    msg += f'📊 *Total de Instalações:* {len(instalacoes_hoje)}\n\n'
-    msg += '👥 *Por Técnico:*\n'
-    
-    tecnicos_ordenados = sorted(por_tecnico.items(), key=lambda x: x[1], reverse=True)
-    for tecnico, quantidade in tecnicos_ordenados:
-        msg += f'  • {tecnico}: *{quantidade}* instalações\n'
-    
-    return msg
-
-# Gerar ranking geral
-def gerar_ranking_tecnicos():
-    dados = carregar_dados()
-    
-    if not dados:
-        return "❌ Nenhuma instalação registrada ainda."
-    
-    # Contar por técnico (todos os tempos)
-    por_tecnico = defaultdict(int)
-    for inst in dados:
-        por_tecnico[inst['tecnico_nome']] += 1
-    
-    # Montar relatório
-    msg = f'🏆 *Ranking Geral de Técnicos*\n\n'
-    msg += f'📊 *Total Geral:* {len(dados)} instalações\n\n'
-    
-    tecnicos_ordenados = sorted(por_tecnico.items(), key=lambda x: x[1], reverse=True)
-    
-    medals = ['🥇', '🥈', '🥉']
-    for idx, (tecnico, quantidade) in enumerate(tecnicos_ordenados, 1):
-        medal = medals[idx-1] if idx <= 3 else f'{idx}º'
-        percentual = (quantidade / len(dados)) * 100
-        msg += f'{medal} *{tecnico}*\n'
-        msg += f'   {quantidade} instalações ({percentual:.1f}%)\n\n'
-    
-    return msg
-
-# Callback dos botões
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    if query.data == 'registrar':
-        context.user_data['modo_registro'] = 'instalacao'
-        await query.edit_message_text(
-            '📝 *Nova Instalação*\n\n'
-            'Por favor, envie o *número da SA*:',
-            parse_mode='Markdown'
-        )
-        return AGUARDANDO_SA
-    
-    elif query.data == 'registrar_reparo':
-        context.user_data['modo_registro'] = 'reparo'
-        await query.edit_message_text(
-            '🔧 *Novo Reparo*\n\n'
-            'Por favor, envie o *número da SA:*:',
-            parse_mode='Markdown'
-        )
-        return AGUARDANDO_SA
-    
-    elif query.data == 'consultar':
-        await query.edit_message_text(
-            '🔍 *Consultar Instalação*\n\n'
-            'Digite o número da SA ou do GPON para buscar:',
-            parse_mode='Markdown'
-        )
-        return AGUARDANDO_CONSULTA
-
-    elif query.data == 'consulta_producao':
-        dados = carregar_dados()
-        user_id = query.from_user.id
-        username = query.from_user.username or query.from_user.first_name
-        inicio_dt, fim_dt = ciclo_atual()
-        instalacoes_user = []
-        for d in dados:
-            try:
-                data_inst = datetime.strptime(d['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
-                if d.get('tecnico_id') == user_id and inicio_dt <= data_inst <= fim_dt:
-                    instalacoes_user.append(d)
-            except:
-                continue
-        if not instalacoes_user:
-            msg = f'❌ Nenhuma instalação entre {inicio_dt.strftime("%d/%m/%Y")} e {fim_dt.strftime("%d/%m/%Y")}.'
-            await query.edit_message_text(msg, parse_mode='Markdown')
-            return None
-        msg = montar_msg_producao(instalacoes_user, inicio_dt, fim_dt, username)
-        await query.edit_message_text(msg, parse_mode='Markdown')
-        return None
-    
-    elif query.data == 'minhas':
-        dados = carregar_dados()
-        user_id = query.from_user.id
-        username = query.from_user.username or query.from_user.first_name
-        
-        instalacoes_user = [d for d in dados if d.get('tecnico_id') == user_id]
-        
-        if not instalacoes_user:
-            await query.edit_message_text('Você ainda não registrou nenhuma instalação.')
-            return None
-        
-        msg = f'📊 *Suas Instalações ({len(instalacoes_user)})*\n\n'
-        for i, inst in enumerate(instalacoes_user[-10:], 1):  # Últimas 10
-            msg += f'{i}. SA: `{inst["sa"]}` | GPON: `{inst["gpon"]}`\n'
-            msg += f'   Data: {inst["data"]}\n\n'
-        
-        await query.edit_message_text(msg, parse_mode='Markdown')
-        return None
-    
-    elif query.data == 'relatorios':
-        await menu_relatorios(query)
-        return None
-    
-    elif query.data == 'rel_mensal':
-        msg = gerar_relatorio_mensal()
-        await query.edit_message_text(msg, parse_mode='Markdown')
-        return None
-    
-    elif query.data == 'rel_semanal':
-        msg = gerar_relatorio_semanal()
-        await query.edit_message_text(msg, parse_mode='Markdown')
-        return None
-    
-    elif query.data == 'rel_hoje':
-        msg = gerar_relatorio_hoje()
-        await query.edit_message_text(msg, parse_mode='Markdown')
-        return None
-    
-    elif query.data == 'rel_periodo':
-        await query.edit_message_text(
-            '📆 *Relatório por Período*\n\nEnvie a *data inicial* no formato `dd/mm/aaaa`:',
-            parse_mode='Markdown'
-        )
-        return AGUARDANDO_DATA_INICIO
-    
-    elif query.data == 'rel_ranking':
-        msg = gerar_ranking_tecnicos()
-        await query.edit_message_text(msg, parse_mode='Markdown')
-        return None
-    
-    elif query.data == 'voltar':
-        keyboard = [
-            [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
-            [InlineKeyboardButton("� Registrar Reparo", callback_data='registrar_reparo')],
-            [InlineKeyboardButton("�� Consultar SA/GPON", callback_data='consultar')],
-            [InlineKeyboardButton("📊 Minhas Instalações", callback_data='minhas')],
-            [InlineKeyboardButton("📆 Consulta Produção", callback_data='consulta_producao')],
-            [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            '🛠️ *Bot de Registro de Instalações*\n\n'
-            'Bem-vindo! Escolha uma opção:',
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
@@ -554,17 +231,22 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Receber número da SA
 async def receber_sa(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['sa'] = update.message.text.strip()
+    sa = update.message.text.strip()
+    # Validação removida a pedido do usuário
+    context.user_data['sa'] = sa
     await update.message.reply_text(
         '✅ SA registrada!\n\n'
-        'Agora envie o *GPON*:',
+        'Agora envie o *GPON*:\n'
+        '_(Ou digite /cancelar para sair)_',
         parse_mode='Markdown'
     )
     return AGUARDANDO_GPON
 
 # Receber GPON
 async def receber_gpon(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['gpon'] = update.message.text.strip()
+    gpon = update.message.text.strip()
+    # Validação removida a pedido do usuário
+    context.user_data['gpon'] = gpon
     context.user_data['fotos'] = []
     modo = context.user_data.get('modo_registro') or 'instalacao'
     if modo == 'reparo':
@@ -619,8 +301,33 @@ async def receber_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     tipo = query.data
     context.user_data['tipo'] = tipo
-    await query.edit_message_text(
-        '✅ Tipo selecionado!\n\n'
+    
+    # Verificar se precisa do Serial do Modem
+    tipos_com_serial = ['instalacao', 'instalacao_tv', 'mudanca_endereco']
+    
+    if tipo in tipos_com_serial:
+        await query.edit_message_text(
+            '✅ Tipo selecionado!\n\n'
+            '📟 Agora envie o *Número de Série do Modem*:\n'
+            '_(Ou digite /cancelar para sair)_',
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_SERIAL
+    else:
+        await query.edit_message_text(
+            '✅ Tipo selecionado!\n\n'
+            '📸 Agora envie as *3 fotos* da instalação.\n'
+            'Quando terminar, digite /finalizar',
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_FOTOS
+
+async def receber_serial(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    serial = update.message.text.strip()
+    context.user_data['serial_modem'] = serial
+    
+    await update.message.reply_text(
+        '✅ Serial registrado!\n\n'
         '📸 Agora envie as *3 fotos* da instalação.\n'
         'Quando terminar, digite /finalizar',
         parse_mode='Markdown'
@@ -648,15 +355,19 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'tecnico_id': update.message.from_user.id,
         'tecnico_nome': tecnico_nome,
         'tecnico_regiao': tecnico_regiao,
+        'serial_modem': context.user_data.get('serial_modem'),
         'data': datetime.now(TZ).strftime('%d/%m/%Y %H:%M')
     }
     
     salvar_instalacao(nova_instalacao)
     
+    msg_serial = f'📟 Serial: `{nova_instalacao["serial_modem"]}`\n' if nova_instalacao.get("serial_modem") else ''
+    
     await update.message.reply_text(
         '✅ *Instalação registrada com sucesso!*\n\n'
         f'📋 SA: `{nova_instalacao["sa"]}`\n'
         f'🔌 GPON: `{nova_instalacao["gpon"]}`\n'
+        f'{msg_serial}'
         f'🧩 Tipo: {nova_instalacao["tipo"]}\n'
         f'🗂️ Categoria: {nova_instalacao["categoria"]}\n'
         f'📸 Fotos: {len(nova_instalacao["fotos"])}\n'
@@ -706,146 +417,6 @@ async def consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for foto_id in resultado.get('fotos', []):
             try:
                 await update.message.reply_photo(photo=foto_id)
-            except:
-                pass
-    return ConversationHandler.END
-
-async def comando_consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        '🔍 *Consultar Instalação*\n\n'
-        'Digite o número da SA ou do GPON para buscar:',
-        parse_mode='Markdown'
-    )
-    return AGUARDANDO_CONSULTA
-
-# Comando /mensal (atalho direto)
-async def comando_mensal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = gerar_relatorio_mensal()
-    await update.message.reply_text(msg, parse_mode='Markdown')
-
-# Comando /semanal (atalho direto)
-async def comando_semanal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = gerar_relatorio_semanal()
-    await update.message.reply_text(msg, parse_mode='Markdown')
-
-# Comando /hoje (atalho direto)
-async def comando_hoje(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = gerar_relatorio_hoje()
-    await update.message.reply_text(msg, parse_mode='Markdown')
-
-async def comando_reparo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['modo_registro'] = 'reparo'
-    await update.message.reply_text(
-        '🔧 *Novo Reparo*\n\nEnvie o *número da SA/OS*:',
-        parse_mode='Markdown'
-    )
-    return AGUARDANDO_SA
-
-async def receber_data_inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text.strip()
-    try:
-        inicio = datetime.strptime(texto, '%d/%m/%Y')
-    except:
-        await update.message.reply_text('❌ Data inválida. Use o formato dd/mm/aaaa.', parse_mode='Markdown')
-        return AGUARDANDO_DATA_INICIO
-    context.user_data['data_inicio'] = inicio
-    modo = context.user_data.get('modo')
-    if modo == 'producao':
-        await update.message.reply_text('Agora envie a *data de fechamento* no formato `dd/mm/aaaa`:', parse_mode='Markdown')
-    else:
-        await update.message.reply_text('Agora envie a *data final* no formato `dd/mm/aaaa`:', parse_mode='Markdown')
-    return AGUARDANDO_DATA_FIM
-
-async def iniciar_producao(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    dados = carregar_dados()
-    user_id = update.message.from_user.id
-    username = update.message.from_user.username or update.message.from_user.first_name
-    inicio_dt, fim_dt = ciclo_atual()
-    instalacoes_user = []
-    for d in dados:
-        try:
-            data_inst = datetime.strptime(d['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
-            if d.get('tecnico_id') == user_id and inicio_dt <= data_inst <= fim_dt:
-                instalacoes_user.append(d)
-        except:
-            continue
-    if not instalacoes_user:
-        msg = f'❌ Nenhuma instalação entre {inicio_dt.strftime("%d/%m/%Y")} e {fim_dt.strftime("%d/%m/%Y")}.'
-        await update.message.reply_text(msg, parse_mode='Markdown')
-        return ConversationHandler.END
-    msg = montar_msg_producao(instalacoes_user, inicio_dt, fim_dt, username)
-    await update.message.reply_text(msg, parse_mode='Markdown')
-    return ConversationHandler.END
-
-async def receber_data_fim(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = update.message.text.strip()
-    try:
-        fim = datetime.strptime(texto, '%d/%m/%Y')
-    except:
-        await update.message.reply_text('❌ Data inválida. Use o formato dd/mm/aaaa.', parse_mode='Markdown')
-        return AGUARDANDO_DATA_FIM
-    inicio = context.user_data.get('data_inicio')
-    if not inicio:
-        await update.message.reply_text('❌ Erro: envie a data inicial primeiro.', parse_mode='Markdown')
-        return ConversationHandler.END
-    if fim < inicio:
-        await update.message.reply_text('❌ A data final é anterior à inicial. Envie novamente a data final.', parse_mode='Markdown')
-        return AGUARDANDO_DATA_FIM
-    inicio_dt = inicio.replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=TZ)
-    fim_dt = fim.replace(hour=23, minute=59, second=59, microsecond=0).replace(tzinfo=TZ)
-    dados = carregar_dados()
-    user_id = update.message.from_user.id
-    username = update.message.from_user.username or update.message.from_user.first_name
-    instalacoes_user = []
-    for d in dados:
-        try:
-            data_inst = datetime.strptime(d['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
-            if d.get('tecnico_id') == user_id and inicio_dt <= data_inst <= fim_dt:
-                instalacoes_user.append(d)
-        except:
-            continue
-    if not instalacoes_user:
-        msg = f'❌ Nenhuma instalação encontrada entre {inicio.strftime("%d/%m/%Y")} e {fim.strftime("%d/%m/%Y")}.'
-        await update.message.reply_text(msg, parse_mode='Markdown')
-        context.user_data.pop('data_inicio', None)
-        context.user_data.pop('modo', None)
-        return ConversationHandler.END
-    modo = context.user_data.get('modo')
-    if modo == 'producao':
-        dias_periodo = (fim_dt - inicio_dt).days + 1
-        media_dia = len(instalacoes_user) / dias_periodo if dias_periodo > 0 else 0
-        pontos = calcular_pontos(instalacoes_user)
-        dias_produtivos = contar_dias_produtivos(instalacoes_user)
-        turbo_ativo = dias_produtivos >= 24
-        tier = obter_faixa_valor(pontos)
-        valor_unit = tier['valor_turbo'] if turbo_ativo else tier['valor']
-        valor_total = pontos * valor_unit
-        msg = (
-            f'📆 *Produção no Período*\n'
-            f'Período: {inicio.strftime("%d/%m/%Y")} a {fim.strftime("%d/%m/%Y")}\n'
-            f'👤 Técnico: {username}\n\n'
-            f'📊 *Total de Instalações:* {len(instalacoes_user)}\n'
-            f'🔢 *Pontos:* {int(pontos)}\n'
-            f'🏷️ *Faixa:* {tier["faixa"]}\n'
-            f'📅 *Dias produtivos:* {dias_produtivos} (>=24 ativa Turbo)\n'
-            f'⚡ *Modo Turbo:* {"Ativo" if turbo_ativo else "Inativo"}\n'
-            f'💵 *Valor por ponto:* {_formata_brl(valor_unit)}\n'
-            f'💰 *Valor total:* {_formata_brl(valor_total)}\n'
-            f'📈 *Média diária:* {media_dia:.1f} instalações/dia\n'
-        )
-        await update.message.reply_text(msg, parse_mode='Markdown')
-    else:
-        msg = (
-            f'📆 *Relatório por Período*\n'
-            f'Período: {inicio.strftime("%d/%m/%Y")} a {fim.strftime("%d/%m/%Y")}\n'
-            f'👤 Técnico: {username}\n\n'
-            f'📊 *Total de Instalações:* {len(instalacoes_user)}\n\n'
-        )
-        ultimos = instalacoes_user[-10:]
-        i = 1
-        for inst in ultimos:
-            msg += f'{i}. SA: `{inst["sa"]}` | GPON: `{inst["gpon"]}`\n'
-            msg += f'   Data: {inst["data"]}\n\n'
             i += 1
         await update.message.reply_text(msg, parse_mode='Markdown')
     context.user_data.pop('data_inicio', None)
@@ -895,6 +466,7 @@ def main():
             AGUARDANDO_SA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_sa)],
             AGUARDANDO_GPON: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_gpon)],
             AGUARDANDO_TIPO: [CallbackQueryHandler(receber_tipo)],
+            AGUARDANDO_SERIAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_serial)],
             AGUARDANDO_FOTOS: [
                 MessageHandler(filters.PHOTO, receber_foto),
                 CommandHandler('finalizar', finalizar)
@@ -912,6 +484,7 @@ def main():
     app.add_handler(CommandHandler('mensal', comando_mensal))
     app.add_handler(CommandHandler('semanal', comando_semanal))
     app.add_handler(CommandHandler('hoje', comando_hoje))
+    app.add_handler(CommandHandler('ajuda', ajuda))
     app.add_handler(conv_handler)
     
     base_url = os.getenv("WEBHOOK_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL")
@@ -920,9 +493,31 @@ def main():
         url_path = TOKEN
         webhook_url = f"{base_url}/{url_path}"
         print('🤖 Bot iniciado (webhook)! Aguardando mensagens...')
+        await app.bot.set_my_commands([
+            BotCommand("start", "Menu principal"),
+            BotCommand("ajuda", "Como usar o bot"),
+            BotCommand("cancelar", "Cancelar operação atual"),
+            BotCommand("mensal", "Relatório mensal"),
+            BotCommand("semanal", "Relatório semanal"),
+            BotCommand("hoje", "Relatório de hoje"),
+            BotCommand("consultar", "Consultar instalação"),
+            BotCommand("reparo", "Registrar reparo"),
+            BotCommand("producao", "Produção por período")
+        ])
         app.run_webhook(listen="0.0.0.0", port=port, url_path=url_path, webhook_url=webhook_url)
     else:
         print('🤖 Bot iniciado (polling)! Aguardando mensagens...')
+        await app.bot.set_my_commands([
+            BotCommand("start", "Menu principal"),
+            BotCommand("ajuda", "Como usar o bot"),
+            BotCommand("cancelar", "Cancelar operação atual"),
+            BotCommand("mensal", "Relatório mensal"),
+            BotCommand("semanal", "Relatório semanal"),
+            BotCommand("hoje", "Relatório de hoje"),
+            BotCommand("consultar", "Consultar instalação"),
+            BotCommand("reparo", "Registrar reparo"),
+            BotCommand("producao", "Produção por período")
+        ])
         app.run_polling()
 
 if __name__ == '__main__':
