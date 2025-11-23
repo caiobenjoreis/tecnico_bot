@@ -646,11 +646,13 @@ async def receber_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     tipo = query.data
     context.user_data['tipo'] = tipo
+    print(f"DEBUG receber_tipo: Tipo selecionado = {tipo}")
     
     # Verificar se precisa do Serial do Modem
     tipos_com_serial = ['instalacao', 'instalacao_tv', 'mudanca_endereco']
     
     if tipo in tipos_com_serial:
+        print(f"DEBUG receber_tipo: Tipo {tipo} requer serial, indo para AGUARDANDO_SERIAL")
         await query.edit_message_text(
             '✅ Tipo selecionado!\n\n'
             '📟 Agora envie o *Número de Série do Modem*:\n'
@@ -659,6 +661,7 @@ async def receber_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return AGUARDANDO_SERIAL
     else:
+        print(f"DEBUG receber_tipo: Tipo {tipo} não requer serial, indo para AGUARDANDO_FOTOS")
         await query.edit_message_text(
             '✅ Tipo selecionado!\n\n'
             '📸 Agora envie as *3 fotos* da instalação.\n'
@@ -670,6 +673,8 @@ async def receber_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receber_serial(update: Update, context: ContextTypes.DEFAULT_TYPE):
     serial = update.message.text.strip()
     context.user_data['serial_modem'] = serial
+    print(f"DEBUG: Serial recebido: {serial}")
+    print(f"DEBUG: Context user_data: {context.user_data}")
     
     await update.message.reply_text(
         '✅ Serial registrado!\n\n'
@@ -677,6 +682,7 @@ async def receber_serial(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'Quando terminar, digite /finalizar',
         parse_mode='Markdown'
     )
+    print("DEBUG: Mensagem enviada, retornando AGUARDANDO_FOTOS")
     return AGUARDANDO_FOTOS
 
 # Finalizar registro
