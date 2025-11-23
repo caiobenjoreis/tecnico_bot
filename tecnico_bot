@@ -20,6 +20,14 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 USE_SUPABASE = bool(SUPABASE_URL and SUPABASE_KEY)
 _SUPABASE_CLIENT = None
 
+# Lista de IDs de administradores (adicione seu ID do Telegram aqui)
+# Para descobrir seu ID, envie /start para o bot e veja nos logs
+ADMIN_IDS = [
+    # Adicione IDs de admin aqui, exemplo:
+    # 1797158471,
+    # 1797158471,
+]
+
 PONTOS_SERVICO = {
     'defeito_banda_larga': 1.43,
     'defeito_linha': 1.43,
@@ -219,9 +227,200 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg, parse_mode='Markdown')
 
+# ==================== PAINEL ADMIN ====================
+
+def is_admin(user_id: int) -> bool:
+    """Verifica se o usuário é administrador"""
+    return user_id in ADMIN_IDS
+
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Painel principal de administração"""
+    user_id = update.message.from_user.id
+    
+    if not is_admin(user_id):
+        await update.message.reply_text('❌ Acesso negado. Você não tem permissão de administrador.')
+        return
+    
+    keyboard = [
+        [InlineKeyboardButton("📊 Estatísticas Gerais", callback_data='admin_stats')],
+        [InlineKeyboardButton("👥 Listar Técnicos", callback_data='admin_users')],
+        [InlineKeyboardButton("📋 Todas Instalações", callback_data='admin_all_installs')],
+        [InlineKeyboardButton("📤 Exportar Dados", callback_data='admin_export')],
+        [InlineKeyboardButton("🔧 Gerenciar Admins", callback_data='admin_manage')],
+        [InlineKeyboardButton("🔙 Voltar", callback_data='voltar')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        '🎛️ *Painel de Administração*\n\n'
+        'Escolha uma opção:',
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def admin_stats(query):
+    """Mostra estatísticas gerais do sistema"""
+    dados = carregar_dados()
+    usuarios = carregar_usuarios()
+    
+    # Estatísticas gerais
+    total_instalacoes = len(dados)
+    total_tecnicos = len(usuarios)
+    
+    # Instalações por tipo
+    por_tipo = defaultdict(int)
+    por_categoria = defaultdict(int)
+    for inst in dados:
+        por_tipo[inst.get('tipo', 'instalacao')] += 1
+        por_categoria[inst.get('categoria', 'instalacao')] += 1
+    
+    # Instalações nos últimos 7 dias
+    agora = datetime.now(TZ)
+    sete_dias_atras = agora - timedelta(days=7)
+    instalacoes_semana = 0
+    for inst in dados:
+        try:
+            data_inst = datetime.strptime(inst['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
+            if data_inst >= sete_dias_atras:
+                instalacoes_semana += 1
+        except:
+            continue
+    
+    # Top 5 técnicos
+    por_tecnico = defaultdict(int)
+    for inst in dados:
+        por_tecnico[inst['tecnico_nome']] += 1
+    top_tecnicos = sorted(por_tecnico.items(), key=lambda x: x[1], reverse=True)[:5]
+    
+    msg = (
+        f'📊 *Estatísticas Gerais*\n\n'
+        f'👥 *Técnicos cadastrados:* {total_tecnicos}\n'
+        f'📦 *Total de instalações:* {total_instalacoes}\n'
+        f'📅 *Últimos 7 dias:* {instalacoes_semana}\n\n'
+        f'📋 *Por Tipo:*\n'
+    )
+    
+    for tipo, qtd in sorted(por_tipo.items(), key=lambda x: x[1], reverse=True):
+        msg += f'  • {tipo}: {qtd}\n'
+    
+    msg += '\n🏆 *Top 5 Técnicos:*\n'
+    for idx, (tecnico, qtd) in enumerate(top_tecnicos, 1):
+        msg += f'{idx}. {tecnico}: {qtd} instalações\n'
+    
+    await query.edit_message_text(msg, parse_mode='Markdown')
+
+async def admin_list_users(query):
+    """Lista todos os técnicos cadastrados"""
+    usuarios = carregar_usuarios()
+    dados = carregar_dados()
+    
+    # Contar instalações por técnico
+    instalacoes_por_tecnico = defaultdict(int)
+    for inst in dados:
+        tecnico_id = str(inst.get('tecnico_id', ''))
+        if tecnico_id:
+            instalacoes_por_tecnico[tecnico_id] += 1
+    
+    msg = f'👥 *Técnicos Cadastrados ({len(usuarios)})*\n\n'
+    
+    for user_id, dados_user in sorted(usuarios.items(), key=lambda x: instalacoes_por_tecnico.get(x[0], 0), reverse=True):
+        nome_completo = f"{dados_user.get('nome', '')} {dados_user.get('sobrenome', '')}".strip()
+        regiao = dados_user.get('regiao', 'N/A')
+        qtd_instalacoes = instalacoes_por_tecnico.get(user_id, 0)
+        is_adm = '👑' if int(user_id) in ADMIN_IDS else ''
+        
+        msg += f'{is_adm} *{nome_completo}*\n'
+        msg += f'  ID: `{user_id}`\n'
+        msg += f'  Região: {regiao}\n'
+        msg += f'  Instalações: {qtd_instalacoes}\n\n'
+    
+    await query.edit_message_text(msg, parse_mode='Markdown')
+
+async def admin_all_installations(query):
+    """Lista todas as instalações recentes"""
+    dados = carregar_dados()
+    
+    # Pegar as últimas 20 instalações
+    ultimas = dados[-20:] if len(dados) > 20 else dados
+    ultimas.reverse()  # Mais recentes primeiro
+    
+    msg = f'📋 *Últimas Instalações ({len(ultimas)}/{len(dados)})*\n\n'
+    
+    for inst in ultimas:
+        msg += f'📅 {inst["data"]}\n'
+        msg += f'SA: `{inst["sa"]}` | GPON: `{inst["gpon"]}`\n'
+        msg += f'👤 {inst["tecnico_nome"]}\n'
+        msg += f'🧩 {inst.get("tipo", "instalacao")}\n\n'
+    
+    await query.edit_message_text(msg, parse_mode='Markdown')
+
+async def admin_export_data(query):
+    """Exporta dados em formato texto"""
+    dados = carregar_dados()
+    usuarios = carregar_usuarios()
+    
+    # Criar relatório completo
+    agora = datetime.now(TZ).strftime('%d/%m/%Y %H:%M')
+    
+    msg = f'📤 *Exportação de Dados*\n'
+    msg += f'Data: {agora}\n\n'
+    msg += f'Total de instalações: {len(dados)}\n'
+    msg += f'Total de técnicos: {len(usuarios)}\n\n'
+    msg += '💾 Para exportar dados completos, acesse o Supabase Dashboard:\n'
+    msg += f'{SUPABASE_URL if SUPABASE_URL else "Configure SUPABASE_URL"}\n\n'
+    msg += '📊 Você também pode usar os comandos:\n'
+    msg += '/mensal - Relatório mensal\n'
+    msg += '/semanal - Relatório semanal\n'
+    
+    await query.edit_message_text(msg, parse_mode='Markdown')
+
+async def admin_manage_admins(query):
+    """Gerenciar administradores"""
+    msg = (
+        '🔧 *Gerenciar Administradores*\n\n'
+        f'Admins atuais: {len(ADMIN_IDS)}\n\n'
+        '📝 Para adicionar/remover admins:\n'
+        '1. Edite o arquivo `tecnico_bot`\n'
+        '2. Encontre a lista `ADMIN_IDS`\n'
+        '3. Adicione ou remova IDs\n'
+        '4. Faça deploy novamente\n\n'
+        '💡 *Como descobrir um ID:*\n'
+        'Peça para o usuário enviar /start\n'
+        'O ID aparecerá nos logs do Render'
+    )
+    
+    await query.edit_message_text(msg, parse_mode='Markdown')
+
+async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para callbacks do painel admin"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        await query.answer('❌ Acesso negado', show_alert=True)
+        return
+    
+    await query.answer()
+    
+    if query.data == 'admin_stats':
+        await admin_stats(query)
+    elif query.data == 'admin_users':
+        await admin_list_users(query)
+    elif query.data == 'admin_all_installs':
+        await admin_all_installations(query)
+    elif query.data == 'admin_export':
+        await admin_export_data(query)
+    elif query.data == 'admin_manage':
+        await admin_manage_admins(query)
+
+# ==================== FIM PAINEL ADMIN ====================
+
 # Comando /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
+    username = update.message.from_user.username or update.message.from_user.first_name
+    print(f"🔍 User ID: {user_id} | Username: {username}")  # Log para descobrir IDs
+    
     usuarios = carregar_usuarios()
     if str(user_id) not in usuarios:
         context.user_data['ident'] = {}
@@ -554,6 +753,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'rel_ranking':
         msg = gerar_ranking_tecnicos()
         await query.edit_message_text(msg, parse_mode='Markdown')
+        return None
+    
+    # Callbacks do painel admin
+    elif query.data.startswith('admin_'):
+        await admin_callback_handler(update, context)
         return None
     
     elif query.data == 'voltar':
@@ -990,6 +1194,7 @@ def main():
             BotCommand("start", "Menu principal"),
             BotCommand("ajuda", "Como usar o bot"),
             BotCommand("cancelar", "Cancelar operação atual"),
+            BotCommand("admin", "🎛️ Painel de administração"),
             BotCommand("mensal", "Relatório mensal"),
             BotCommand("semanal", "Relatório semanal"),
             BotCommand("hoje", "Relatório de hoje"),
@@ -1028,6 +1233,7 @@ def main():
         fallbacks=[CommandHandler('cancelar', cancelar)]
     )
     
+    app.add_handler(CommandHandler('admin', admin_panel))
     app.add_handler(CommandHandler('mensal', comando_mensal))
     app.add_handler(CommandHandler('semanal', comando_semanal))
     app.add_handler(CommandHandler('hoje', comando_hoje))
