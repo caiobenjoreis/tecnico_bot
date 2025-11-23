@@ -780,14 +780,23 @@ async def consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text = text.replace(char, f'\\{char}')
             return text
         
-        msg = (
-            f'📋 *SA:* `{resultado["sa"]}`\n'
+        msg_parts = [
+            f'📋 *SA:* `{resultado["sa"]}`\n',
             f'🔌 *GPON:* `{resultado["gpon"]}`\n'
-            f'🧩 *Tipo:* {escape_md(resultado.get("tipo", "instalacao"))}\n'
-            f'👤 *Técnico:* {escape_md(resultado["tecnico_nome"])}\n'
-            f'📅 *Data:* {escape_md(resultado["data"])}\n'
+        ]
+        
+        # Adicionar serial se existir
+        if resultado.get("serial_modem"):
+            msg_parts.append(f'📟 *Serial:* `{resultado["serial_modem"]}`\n')
+        
+        msg_parts.extend([
+            f'🧩 *Tipo:* {escape_md(resultado.get("tipo", "instalacao"))}\n',
+            f'👤 *Técnico:* {escape_md(resultado["tecnico_nome"])}\n',
+            f'📅 *Data:* {escape_md(resultado["data"])}\n',
             f'📸 *Fotos:* {len(resultado.get("fotos", []))}'
-        )
+        ])
+        
+        msg = ''.join(msg_parts)
         
         await update.message.reply_text(msg, parse_mode='MarkdownV2')
         
