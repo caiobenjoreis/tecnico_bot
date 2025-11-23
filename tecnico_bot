@@ -310,6 +310,10 @@ async def admin_stats(query):
         por_tecnico[inst['tecnico_nome']] += 1
     top_tecnicos = sorted(por_tecnico.items(), key=lambda x: x[1], reverse=True)[:5]
     
+    # Escapar underscores para Markdown
+    def escape_md(text):
+        return str(text).replace('_', '\\_')
+    
     msg = (
         f'📊 *Estatísticas Gerais*\n\n'
         f'👥 *Técnicos cadastrados:* {total_tecnicos}\n'
@@ -319,11 +323,11 @@ async def admin_stats(query):
     )
     
     for tipo, qtd in sorted(por_tipo.items(), key=lambda x: x[1], reverse=True):
-        msg += f'  • {tipo}: {qtd}\n'
+        msg += f'  • {escape_md(tipo)}: {qtd}\n'
     
     msg += '\n🏆 *Top 5 Técnicos:*\n'
     for idx, (tecnico, qtd) in enumerate(top_tecnicos, 1):
-        msg += f'{idx}. {tecnico}: {qtd} instalações\n'
+        msg += f'{idx}. {escape_md(tecnico)}: {qtd} instalações\n'
     
     await query.edit_message_text(msg, parse_mode='Markdown')
 
@@ -339,6 +343,10 @@ async def admin_list_users(query):
         if tecnico_id:
             instalacoes_por_tecnico[tecnico_id] += 1
     
+    # Escapar underscores para Markdown
+    def escape_md(text):
+        return str(text).replace('_', '\\_')
+    
     msg = f'👥 *Técnicos Cadastrados ({len(usuarios)})*\n\n'
     
     for user_id, dados_user in sorted(usuarios.items(), key=lambda x: instalacoes_por_tecnico.get(x[0], 0), reverse=True):
@@ -347,9 +355,9 @@ async def admin_list_users(query):
         qtd_instalacoes = instalacoes_por_tecnico.get(user_id, 0)
         is_adm = '👑' if int(user_id) in ADMIN_IDS else ''
         
-        msg += f'{is_adm} *{nome_completo}*\n'
+        msg += f'{is_adm} *{escape_md(nome_completo)}*\n'
         msg += f'  ID: `{user_id}`\n'
-        msg += f'  Região: {regiao}\n'
+        msg += f'  Região: {escape_md(regiao)}\n'
         msg += f'  Instalações: {qtd_instalacoes}\n\n'
     
     await query.edit_message_text(msg, parse_mode='Markdown')
@@ -362,13 +370,17 @@ async def admin_all_installations(query):
     ultimas = dados[-20:] if len(dados) > 20 else dados
     ultimas.reverse()  # Mais recentes primeiro
     
+    # Escapar underscores para Markdown
+    def escape_md(text):
+        return str(text).replace('_', '\\_')
+    
     msg = f'📋 *Últimas Instalações ({len(ultimas)}/{len(dados)})*\n\n'
     
     for inst in ultimas:
-        msg += f'📅 {inst["data"]}\n'
+        msg += f'📅 {escape_md(inst["data"])}\n'
         msg += f'SA: `{inst["sa"]}` | GPON: `{inst["gpon"]}`\n'
-        msg += f'👤 {inst["tecnico_nome"]}\n'
-        msg += f'🧩 {inst.get("tipo", "instalacao")}\n\n'
+        msg += f'👤 {escape_md(inst["tecnico_nome"])}\n'
+        msg += f'🧩 {escape_md(inst.get("tipo", "instalacao"))}\n\n'
     
     await query.edit_message_text(msg, parse_mode='Markdown')
 
