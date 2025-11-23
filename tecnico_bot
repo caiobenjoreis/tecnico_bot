@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from supabase import create_client, Client
 
 # Estados da conversa
-AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_TIPO, AGUARDANDO_SERIAL, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO, AGUARDANDO_CONSULTA = range(11)
+AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_TIPO, AGUARDANDO_SERIAL, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO, AGUARDANDO_CONSULTA, AGUARDANDO_BROADCAST = range(12)
 
 # Arquivo para salvar os dados
 DADOS_FILE = 'instalacoes.json'
@@ -21,11 +21,9 @@ USE_SUPABASE = bool(SUPABASE_URL and SUPABASE_KEY)
 _SUPABASE_CLIENT = None
 
 # Lista de IDs de administradores (adicione seu ID do Telegram aqui)
-# Para descobrir seu ID, envie /start para o bot e veja nos logs
+# Para descobrir seu ID, use o comando /meuid
 ADMIN_IDS = [
-    # Adicione IDs de admin aqui, exemplo:
-    # 1797158471,
-    # 1797158471,
+    1797158471,  # Admin principal
 ]
 
 PONTOS_SERVICO = {
@@ -217,6 +215,7 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '🔹 /start - Iniciar o bot e ver o menu principal\n'
         '🔹 /ajuda - Ver esta mensagem de ajuda\n'
         '🔹 /cancelar - Cancelar a operação atual\n'
+        '🔹 /meuid - Descobrir seu ID do Telegram\n'
         '🔹 /mensal - Relatório de produção mensal\n'
         '🔹 /semanal - Relatório de produção semanal\n'
         '🔹 /hoje - Relatório de produção de hoje\n'
@@ -225,6 +224,24 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '🔹 /producao - Consultar produção por período\n\n'
         '💡 *Dica:* Se ficar preso em alguma etapa, digite /cancelar para voltar ao início.'
     )
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+# Comando /meuid - Descobre o ID do usuário
+async def meu_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username or "Não definido"
+    first_name = update.message.from_user.first_name
+    
+    msg = (
+        f'🆔 *Suas Informações*\n\n'
+        f'👤 Nome: {first_name}\n'
+        f'🔖 Username: @{username}\n'
+        f'🔢 **ID do Telegram:** `{user_id}`\n\n'
+        f'💡 *Para se tornar admin:*\n'
+        f'Envie este ID para o administrador do sistema.\n'
+        f'Ele deve adicionar `{user_id}` na lista `ADMIN_IDS`.'
+    )
+    
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 # ==================== PAINEL ADMIN ====================
@@ -245,7 +262,8 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📊 Estatísticas Gerais", callback_data='admin_stats')],
         [InlineKeyboardButton("👥 Listar Técnicos", callback_data='admin_users')],
         [InlineKeyboardButton("📋 Todas Instalações", callback_data='admin_all_installs')],
-        [InlineKeyboardButton("📤 Exportar Dados", callback_data='admin_export')],
+        [InlineKeyboardButton("� Enviar Mensagem para Todos", callback_data='admin_broadcast')],
+        [InlineKeyboardButton("�📤 Exportar Dados", callback_data='admin_export')],
         [InlineKeyboardButton("🔧 Gerenciar Admins", callback_data='admin_manage')],
         [InlineKeyboardButton("🔙 Voltar", callback_data='voltar')]
     ]
@@ -385,11 +403,80 @@ async def admin_manage_admins(query):
         '3. Adicione ou remova IDs\n'
         '4. Faça deploy novamente\n\n'
         '💡 *Como descobrir um ID:*\n'
+        'Use o comando /meuid ou\n'
         'Peça para o usuário enviar /start\n'
         'O ID aparecerá nos logs do Render'
     )
     
     await query.edit_message_text(msg, parse_mode='Markdown')
+
+async def admin_broadcast_start(query):
+    """Inicia o processo de broadcast"""
+    msg = (
+        '📢 *Enviar Mensagem para Todos*\n\n'
+        '📝 Digite a mensagem que deseja enviar para todos os técnicos cadastrados.\n\n'
+        '💡 *Dicas:*\n'
+        '• Use Markdown para formatação\n'
+        '• Seja claro e objetivo\n'
+        '• A mensagem será enviada para todos os usuários\n\n'
+        '⚠️ Digite /cancelar para cancelar o envio.'
+    )
+    await query.edit_message_text(msg, parse_mode='Markdown')
+    return AGUARDANDO_BROADCAST
+
+async def admin_send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Envia a mensagem broadcast para todos os técnicos"""
+    user_id = update.message.from_user.id
+    
+    if not is_admin(user_id):
+        await update.message.reply_text('❌ Acesso negado.')
+        return ConversationHandler.END
+    
+    mensagem = update.message.text.strip()
+    usuarios = carregar_usuarios()
+    
+    if not usuarios:
+        await update.message.reply_text('❌ Nenhum técnico cadastrado para enviar mensagem.')
+        return ConversationHandler.END
+    
+    # Adicionar cabeçalho à mensagem
+    mensagem_completa = (
+        f'📢 *AVISO DA ADMINISTRAÇÃO*\n'
+        f'━━━━━━━━━━━━━━━━━━━━\n\n'
+        f'{mensagem}\n\n'
+        f'━━━━━━━━━━━━━━━━━━━━'
+    )
+    
+    # Enviar para todos os usuários
+    enviados = 0
+    falhas = 0
+    
+    await update.message.reply_text('📤 Enviando mensagem para todos os técnicos...')
+    
+    for uid in usuarios.keys():
+        try:
+            await context.bot.send_message(
+                chat_id=int(uid),
+                text=mensagem_completa,
+                parse_mode='Markdown'
+            )
+            enviados += 1
+        except Exception as e:
+            falhas += 1
+            print(f"Erro ao enviar para {uid}: {e}")
+    
+    # Relatório de envio
+    relatorio = (
+        f'✅ *Broadcast Concluído!*\n\n'
+        f'📊 *Estatísticas:*\n'
+        f'✅ Enviados: {enviados}\n'
+        f'❌ Falhas: {falhas}\n'
+        f'👥 Total de técnicos: {len(usuarios)}\n\n'
+        f'💡 Falhas podem ocorrer se o usuário bloqueou o bot.'
+    )
+    
+    await update.message.reply_text(relatorio, parse_mode='Markdown')
+    return ConversationHandler.END
 
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler para callbacks do painel admin"""
@@ -408,6 +495,8 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await admin_list_users(query)
     elif query.data == 'admin_all_installs':
         await admin_all_installations(query)
+    elif query.data == 'admin_broadcast':
+        return await admin_broadcast_start(query)
     elif query.data == 'admin_export':
         await admin_export_data(query)
     elif query.data == 'admin_manage':
@@ -1194,6 +1283,7 @@ def main():
             BotCommand("start", "Menu principal"),
             BotCommand("ajuda", "Como usar o bot"),
             BotCommand("cancelar", "Cancelar operação atual"),
+            BotCommand("meuid", "🆔 Descobrir meu ID"),
             BotCommand("admin", "🎛️ Painel de administração"),
             BotCommand("mensal", "Relatório mensal"),
             BotCommand("semanal", "Relatório semanal"),
@@ -1229,11 +1319,13 @@ def main():
             AGUARDANDO_SOBRENOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_sobrenome)],
             AGUARDANDO_REGIAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_regiao)],
             AGUARDANDO_CONSULTA: [MessageHandler(filters.TEXT & ~filters.COMMAND, consultar)],
+            AGUARDANDO_BROADCAST: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_send_broadcast)],
         },
         fallbacks=[CommandHandler('cancelar', cancelar)]
     )
     
     app.add_handler(CommandHandler('admin', admin_panel))
+    app.add_handler(CommandHandler('meuid', meu_id))
     app.add_handler(CommandHandler('mensal', comando_mensal))
     app.add_handler(CommandHandler('semanal', comando_semanal))
     app.add_handler(CommandHandler('hoje', comando_hoje))
