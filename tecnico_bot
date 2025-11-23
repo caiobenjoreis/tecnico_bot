@@ -497,22 +497,27 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     
     if not is_admin(user_id):
         await query.answer('❌ Acesso negado', show_alert=True)
-        return
+        return ConversationHandler.END
     
     await query.answer()
     
     if query.data == 'admin_stats':
         await admin_stats(query)
+        return None
     elif query.data == 'admin_users':
         await admin_list_users(query)
+        return None
     elif query.data == 'admin_all_installs':
         await admin_all_installations(query)
+        return None
     elif query.data == 'admin_broadcast':
         return await admin_broadcast_start(query)
     elif query.data == 'admin_export':
         await admin_export_data(query)
+        return None
     elif query.data == 'admin_manage':
         await admin_manage_admins(query)
+        return None
 
 # ==================== FIM PAINEL ADMIN ====================
 
@@ -858,8 +863,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Callbacks do painel admin
     elif query.data.startswith('admin_'):
-        await admin_callback_handler(update, context)
-        return None
+        return await admin_callback_handler(update, context)
     
     elif query.data == 'voltar':
         keyboard = [
