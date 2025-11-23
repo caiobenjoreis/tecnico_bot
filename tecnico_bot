@@ -770,16 +770,26 @@ async def consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     for resultado in resultados:
+        # Escapar caracteres especiais para MarkdownV2
+        def escape_md(text):
+            if text is None:
+                return 'N/A'
+            special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+            text = str(text)
+            for char in special_chars:
+                text = text.replace(char, f'\\{char}')
+            return text
+        
         msg = (
             f'📋 *SA:* `{resultado["sa"]}`\n'
             f'🔌 *GPON:* `{resultado["gpon"]}`\n'
-            f'🧩 *Tipo:* {resultado.get("tipo", "instalacao")}\n'
-            f'👤 *Técnico:* {resultado["tecnico_nome"]}`\n'
-            f'📅 *Data:* {resultado["data"]}`\n'
+            f'🧩 *Tipo:* {escape_md(resultado.get("tipo", "instalacao"))}\n'
+            f'👤 *Técnico:* {escape_md(resultado["tecnico_nome"])}\n'
+            f'📅 *Data:* {escape_md(resultado["data"])}\n'
             f'📸 *Fotos:* {len(resultado.get("fotos", []))}'
         )
         
-        await update.message.reply_text(msg, parse_mode='Markdown')
+        await update.message.reply_text(msg, parse_mode='MarkdownV2')
         
         # Enviar as fotos
         for foto_id in resultado.get('fotos', []):
