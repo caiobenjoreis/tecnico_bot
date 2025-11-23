@@ -712,21 +712,38 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     salvar_instalacao(nova_instalacao)
     
-    msg_serial = f'📟 Serial: `{nova_instalacao["serial_modem"]}`\n' if nova_instalacao.get("serial_modem") else ''
+    # Escapar caracteres especiais do Markdown
+    def escape_markdown(text):
+        if text is None:
+            return 'não informada'
+        # Escapar caracteres especiais do Markdown v2
+        special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+        for char in special_chars:
+            text = str(text).replace(char, f'\\{char}')
+        return text
+    
+    msg_parts = [
+        '✅ *Instalação registrada com sucesso\\!*\n\n',
+        f'📋 SA: `{nova_instalacao["sa"]}`\n',
+        f'🔌 GPON: `{nova_instalacao["gpon"]}`\n'
+    ]
+    
+    if nova_instalacao.get("serial_modem"):
+        msg_parts.append(f'📟 Serial: `{nova_instalacao["serial_modem"]}`\n')
+    
+    msg_parts.extend([
+        f'🧩 Tipo: {escape_markdown(nova_instalacao["tipo"])}\n',
+        f'🗂️ Categoria: {escape_markdown(nova_instalacao["categoria"])}\n',
+        f'📸 Fotos: {len(nova_instalacao["fotos"])}\n',
+        f'👤 Técnico: {escape_markdown(nova_instalacao["tecnico_nome"])}\n',
+        f'📍 Região: {escape_markdown(nova_instalacao["tecnico_regiao"])}\n',
+        f'📅 Data: {escape_markdown(nova_instalacao["data"])}\n\n',
+        'Use /start para nova ação\\.'
+    ])
     
     await update.message.reply_text(
-        '✅ *Instalação registrada com sucesso!*\n\n'
-        f'📋 SA: `{nova_instalacao["sa"]}`\n'
-        f'🔌 GPON: `{nova_instalacao["gpon"]}`\n'
-        f'{msg_serial}'
-        f'🧩 Tipo: {nova_instalacao["tipo"]}\n'
-        f'🗂️ Categoria: {nova_instalacao["categoria"]}\n'
-        f'📸 Fotos: {len(nova_instalacao["fotos"])}\n'
-        f'👤 Técnico: {nova_instalacao["tecnico_nome"]}\n'
-        f'📍 Região: {nova_instalacao["tecnico_regiao"] or "não informada"}\n'
-        f'📅 Data: {nova_instalacao["data"]}\n\n'
-        'Use /start para nova ação.',
-        parse_mode='Markdown'
+        ''.join(msg_parts),
+        parse_mode='MarkdownV2'
     )
     
     context.user_data.clear()
