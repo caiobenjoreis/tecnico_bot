@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters, ContextTypes
 from supabase import create_client, Client
+from keep_alive import keep_alive
 
 # Estados da conversa
 AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_TIPO, AGUARDANDO_SERIAL, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO, AGUARDANDO_CONSULTA, AGUARDANDO_BROADCAST = range(12)
@@ -1348,16 +1349,11 @@ def main():
     app.add_handler(CommandHandler('ajuda', ajuda))
     app.add_handler(conv_handler)
     
-    base_url = os.getenv("WEBHOOK_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL")
-    if base_url:
-        port = int(os.getenv("PORT", "10000"))
-        url_path = TOKEN
-        webhook_url = f"{base_url}/{url_path}"
-        print('🤖 Bot iniciado (webhook)! Aguardando mensagens...')
-        app.run_webhook(listen="0.0.0.0", port=port, url_path=url_path, webhook_url=webhook_url)
-    else:
-        print('🤖 Bot iniciado (polling)! Aguardando mensagens...')
-        app.run_polling()
+    # Iniciar servidor web falso para manter o bot vivo no Render
+    keep_alive()
+    
+    print('🤖 Bot iniciado (polling)! Aguardando mensagens...')
+    app.run_polling()
 
 if __name__ == '__main__':
     main()
