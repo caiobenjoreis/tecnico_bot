@@ -103,22 +103,49 @@ def montar_msg_producao(instalacoes_user: list, inicio: datetime, fim: datetime,
     tier = obter_faixa_valor(pontos)
     valor_unit = tier['valor_turbo'] if turbo_ativo else tier['valor']
     valor_total = pontos * valor_unit
-    min_sem_turbo = _formata_brl(tier['min'] * tier['valor'])
-    min_com_turbo = _formata_brl(tier['min'] * tier['valor_turbo'])
+    
+    # Encontrar próxima faixa
+    proxima_faixa = None
+    for t in reversed(TABELA_FAIXAS):
+        if t['min'] > pontos:
+            proxima_faixa = t
+            break
+            
+    # Barra de progresso
+    progresso_msg = ""
+    if proxima_faixa:
+        meta = proxima_faixa['min']
+        falta = meta - pontos
+        percentual = min(100, (pontos / meta) * 100)
+        blocos = int(percentual / 10)
+        barra = "█" * blocos + "░" * (10 - blocos)
+        
+        # Estimativa de instalações faltantes (média 1.5 pts por inst)
+        inst_faltantes = int(falta / 1.5) + 1
+        
+        progresso_msg = (
+            f'\n🎯 *Próxima Meta: Faixa {proxima_faixa["faixa"]}*\n'
+            f'Progresso: `{barra}` {percentual:.1f}%\n'
+            f'Faltam: *{falta:.2f} pontos* (~{inst_faltantes} inst.)\n'
+        )
+    else:
+        progresso_msg = "\n🏆 *Parabéns! Você atingiu a faixa máxima!*\n"
+
     msg = (
         f'📆 *Produção no Período*\n'
         f'Período: {inicio.strftime("%d/%m/%Y")} a {fim.strftime("%d/%m/%Y")}\n'
         f'👤 Técnico: {username}\n\n'
-        f'📊 *Total de Instalações:* {len(instalacoes_user)}\n'
-        f'🔢 *Pontos:* {int(pontos)}\n'
-        f'🏷️ *Faixa:* {tier["faixa"]}\n'
-        f'📅 *Dias produtivos:* {dias_produtivos} (>=24 ativa Turbo)\n'
-        f'⚡ *Modo Turbo:* {"Ativo" if turbo_ativo else "Inativo"}\n'
-        f'💵 *Valor por ponto:* {_formata_brl(valor_unit)}\n'
-        f'💰 *Valor total:* {_formata_brl(valor_total)}\n'
-        f'🔻 *Mínimo na faixa (s/ Turbo):* {min_sem_turbo}\n'
-        f'🔺 *Mínimo na faixa (c/ Turbo):* {min_com_turbo}\n'
-        f'📈 *Média diária:* {media_dia:.1f} instalações/dia\n'
+        f'📊 *Resumo:*\n'
+        f'• Instalações: {len(instalacoes_user)}\n'
+        f'• Pontos: *{pontos:.2f}*\n'
+        f'• Dias Produtivos: {dias_produtivos}/24\n'
+        f'• Média Diária: {media_dia:.1f}\n'
+        f'{progresso_msg}\n'
+        f'💰 *Financeiro:*\n'
+        f'• Faixa Atual: *{tier["faixa"]}*\n'
+        f'• Modo Turbo: {"✅ ATIVO" if turbo_ativo else "❌ INATIVO"}\n'
+        f'• Valor Ponto: {_formata_brl(valor_unit)}\n'
+        f'• *Total Estimado: {_formata_brl(valor_total)}*\n'
     )
     return msg
 
@@ -808,6 +835,44 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(msg, parse_mode='Markdown')
             return None
         msg = montar_msg_producao(instalacoes_user, inicio_dt, fim_dt, username)
+        
+        keyboard = [[InlineKeyboardButton("📄 Ver Detalhes", callback_data='detalhes_producao')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
+        return None
+    
+    elif query.data == 'detalhes_producao':
+        dados = carregar_dados()
+        user_id = query.from_user.id
+        inicio_dt, fim_dt = ciclo_atual()
+        
+        instalacoes_user = []
+        for d in dados:
+            try:
+                data_inst = datetime.strptime(d['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
+                if d.get('tecnico_id') == user_id and inicio_dt <= data_inst <= fim_dt:
+                    instalacoes_user.append(d)
+            except:
+                continue
+                
+        if not instalacoes_user:
+            await query.answer("Nenhuma instalação encontrada.", show_alert=True)
+            return None
+            
+        # Gerar arquivo de texto ou mensagem longa
+        msg = f"📄 *Detalhes do Ciclo ({inicio_dt.strftime('%d/%m')} - {fim_dt.strftime('%d/%m')})*\n\n"
+        for inst in sorted(instalacoes_user, key=lambda x: datetime.strptime(x['data'], '%d/%m/%Y %H:%M'), reverse=True):
+            tipo = inst.get('tipo', 'Instalação')
+            pontos = PONTOS_SERVICO.get(tipo.lower(), 0)
+            msg += f"📅 {inst['data']} | {pontos} pts\n"
+            msg += f"🔧 {tipo} | SA: {inst['sa']}\n"
+            msg += f"──────────────────\n"
+            
+        # Se a mensagem for muito longa, cortar
+        if len(msg) > 4000:
+            msg = msg[:4000] + "\n\n(Lista truncada devido ao tamanho...)"
+            
         await query.edit_message_text(msg, parse_mode='Markdown')
         return None
     
