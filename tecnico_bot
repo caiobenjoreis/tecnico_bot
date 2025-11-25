@@ -9,7 +9,7 @@ from supabase import create_client, Client
 from keep_alive import keep_alive
 
 # Estados da conversa
-AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_TIPO, AGUARDANDO_SERIAL, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO, AGUARDANDO_CONSULTA, AGUARDANDO_BROADCAST = range(12)
+AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_TIPO, AGUARDANDO_SERIAL, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO, AGUARDANDO_CONSULTA, AGUARDANDO_BROADCAST, AGUARDANDO_CONFIRMACAO_BROADCAST = range(13)
 
 # Arquivo para salvar os dados
 DADOS_FILE = 'instalacoes.json'
@@ -454,53 +454,194 @@ async def admin_broadcast_start(query):
     """Inicia o processo de broadcast"""
     msg = (
         '📢 *Enviar Mensagem para Todos*\n\n'
-        '📝 Digite a mensagem que deseja enviar para todos os técnicos cadastrados.\n\n'
-        '💡 *Dicas:*\n'
-        '• Use Markdown para formatação\n'
-        '• Seja claro e objetivo\n'
-        '• A mensagem será enviada para todos os usuários\n\n'
+        '📝 Envie a mensagem que deseja transmitir para todos os técnicos cadastrados.\n\n'
+        '💡 *Você pode enviar:*\n'
+        '• Texto simples\n'
+        '• 📷 Foto com legenda\n'
+        '• 🎥 Vídeo com legenda\n'
+        '• 📄 Documento com legenda\n\n'
+        '✨ *Recursos:*\n'
+        '• Use Markdown para formatação de texto\n'
+        '• Opção de fixar a mensagem nos chats\n'
+        '• Preview antes de enviar\n\n'
         '⚠️ Digite /cancelar para cancelar o envio.'
     )
     await query.edit_message_text(msg, parse_mode='Markdown')
     return AGUARDANDO_BROADCAST
 
+
 async def admin_send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Envia a mensagem broadcast para todos os técnicos"""
+    """Recebe a mensagem broadcast (texto ou mídia) e mostra preview com opções"""
     user_id = update.message.from_user.id
     
     if not is_admin(user_id):
         await update.message.reply_text('❌ Acesso negado.')
         return ConversationHandler.END
     
-    mensagem = update.message.text.strip()
+    # Detectar tipo de mensagem e armazenar dados
+    broadcast_data = {}
+    
+    if update.message.photo:
+        # Foto com legenda
+        broadcast_data['type'] = 'photo'
+        broadcast_data['file_id'] = update.message.photo[-1].file_id  # Maior resolução
+        broadcast_data['caption'] = update.message.caption or ''
+        preview_type = '📷 Foto'
+    elif update.message.video:
+        # Vídeo com legenda
+        broadcast_data['type'] = 'video'
+        broadcast_data['file_id'] = update.message.video.file_id
+        broadcast_data['caption'] = update.message.caption or ''
+        preview_type = '🎥 Vídeo'
+    elif update.message.document:
+        # Documento com legenda
+        broadcast_data['type'] = 'document'
+        broadcast_data['file_id'] = update.message.document.file_id
+        broadcast_data['caption'] = update.message.caption or ''
+        preview_type = '📄 Documento'
+    elif update.message.text:
+        # Texto simples
+        broadcast_data['type'] = 'text'
+        broadcast_data['text'] = update.message.text.strip()
+        preview_type = '📝 Texto'
+    else:
+        await update.message.reply_text('❌ Tipo de mensagem não suportado. Use texto, foto, vídeo ou documento.')
+        return AGUARDANDO_BROADCAST
+    
+    # Armazenar dados no contexto
+    context.user_data['broadcast_data'] = broadcast_data
+    
+    # Mostrar preview e opções
+    usuarios = carregar_usuarios()
+    total_usuarios = len(usuarios)
+    
+    # Preparar preview da mensagem
+    if broadcast_data['type'] == 'text':
+        preview_content = broadcast_data['text'][:200]
+        if len(broadcast_data['text']) > 200:
+            preview_content += '...'
+    else:
+        preview_content = broadcast_data.get('caption', '(sem legenda)')[:200]
+        if len(broadcast_data.get('caption', '')) > 200:
+            preview_content += '...'
+    
+    preview_msg = (
+        f'📋 *Preview da Mensagem*\n\n'
+        f'Tipo: {preview_type}\n'
+        f'Destinatários: {total_usuarios} técnicos\n\n'
+        f'*Conteúdo:*\n{preview_content}\n\n'
+        f'Escolha uma opção:'
+    )
+    
+    # Botões de confirmação
+    keyboard = [
+        [InlineKeyboardButton("✅ Enviar", callback_data='broadcast_send')],
+        [InlineKeyboardButton("📌 Enviar e Fixar", callback_data='broadcast_send_pin')],
+        [InlineKeyboardButton("❌ Cancelar", callback_data='broadcast_cancel')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(preview_msg, reply_markup=reply_markup, parse_mode='Markdown')
+    return AGUARDANDO_CONFIRMACAO_BROADCAST
+
+async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Executa o broadcast após confirmação do admin"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    if not is_admin(user_id):
+        await query.answer('❌ Acesso negado', show_alert=True)
+        return ConversationHandler.END
+    
+    await query.answer()
+    
+    # Verificar se é cancelamento
+    if query.data == 'broadcast_cancel':
+        await query.edit_message_text('❌ Broadcast cancelado.')
+        context.user_data.pop('broadcast_data', None)
+        return ConversationHandler.END
+    
+    # Verificar se deve fixar
+    pin_message = query.data == 'broadcast_send_pin'
+    
+    # Recuperar dados do broadcast
+    broadcast_data = context.user_data.get('broadcast_data')
+    if not broadcast_data:
+        await query.edit_message_text('❌ Erro: dados do broadcast não encontrados.')
+        return ConversationHandler.END
+    
     usuarios = carregar_usuarios()
     
     if not usuarios:
-        await update.message.reply_text('❌ Nenhum técnico cadastrado para enviar mensagem.')
+        await query.edit_message_text('❌ Nenhum técnico cadastrado para enviar mensagem.')
         return ConversationHandler.END
     
-    # Adicionar cabeçalho à mensagem
-    mensagem_completa = (
-        f'📢 *AVISO DA ADMINISTRAÇÃO*\n'
-        f'━━━━━━━━━━━━━━━━━━━━\n\n'
-        f'{mensagem}\n\n'
-        f'━━━━━━━━━━━━━━━━━━━━'
-    )
+    # Atualizar mensagem para mostrar progresso
+    await query.edit_message_text('📤 Enviando mensagem para todos os técnicos...')
+    
+    # Preparar cabeçalho
+    header = '📢 *AVISO DA ADMINISTRAÇÃO*\n━━━━━━━━━━━━━━━━━━━━\n\n'
+    footer = '\n\n━━━━━━━━━━━━━━━━━━━━'
     
     # Enviar para todos os usuários
     enviados = 0
     falhas = 0
-    
-    await update.message.reply_text('📤 Enviando mensagem para todos os técnicos...')
+    fixados = 0
     
     for uid in usuarios.keys():
         try:
-            await context.bot.send_message(
-                chat_id=int(uid),
-                text=mensagem_completa,
-                parse_mode='Markdown'
-            )
+            message_sent = None
+            
+            if broadcast_data['type'] == 'text':
+                # Texto simples
+                mensagem_completa = header + broadcast_data['text'] + footer
+                message_sent = await context.bot.send_message(
+                    chat_id=int(uid),
+                    text=mensagem_completa,
+                    parse_mode='Markdown'
+                )
+            elif broadcast_data['type'] == 'photo':
+                # Foto com legenda
+                caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
+                message_sent = await context.bot.send_photo(
+                    chat_id=int(uid),
+                    photo=broadcast_data['file_id'],
+                    caption=caption,
+                    parse_mode='Markdown'
+                )
+            elif broadcast_data['type'] == 'video':
+                # Vídeo com legenda
+                caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
+                message_sent = await context.bot.send_video(
+                    chat_id=int(uid),
+                    video=broadcast_data['file_id'],
+                    caption=caption,
+                    parse_mode='Markdown'
+                )
+            elif broadcast_data['type'] == 'document':
+                # Documento com legenda
+                caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
+                message_sent = await context.bot.send_document(
+                    chat_id=int(uid),
+                    document=broadcast_data['file_id'],
+                    caption=caption,
+                    parse_mode='Markdown'
+                )
+            
             enviados += 1
+            
+            # Fixar mensagem se solicitado
+            if pin_message and message_sent:
+                try:
+                    await context.bot.pin_chat_message(
+                        chat_id=int(uid),
+                        message_id=message_sent.message_id,
+                        disable_notification=True
+                    )
+                    fixados += 1
+                except Exception as pin_error:
+                    print(f"Erro ao fixar mensagem para {uid}: {pin_error}")
+                    
         except Exception as e:
             falhas += 1
             print(f"Erro ao enviar para {uid}: {e}")
@@ -511,12 +652,21 @@ async def admin_send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYP
         f'📊 *Estatísticas:*\n'
         f'✅ Enviados: {enviados}\n'
         f'❌ Falhas: {falhas}\n'
-        f'👥 Total de técnicos: {len(usuarios)}\n\n'
-        f'💡 Falhas podem ocorrer se o usuário bloqueou o bot.'
+        f'👥 Total de técnicos: {len(usuarios)}\n'
     )
     
-    await update.message.reply_text(relatorio, parse_mode='Markdown')
+    if pin_message:
+        relatorio += f'📌 Mensagens fixadas: {fixados}\n'
+    
+    relatorio += '\n💡 Falhas podem ocorrer se o usuário bloqueou o bot.'
+    
+    await query.edit_message_text(relatorio, parse_mode='Markdown')
+    
+    # Limpar dados
+    context.user_data.pop('broadcast_data', None)
+    
     return ConversationHandler.END
+
 
 async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler para callbacks do painel admin"""
@@ -1401,7 +1551,13 @@ def main():
             AGUARDANDO_SOBRENOME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_sobrenome)],
             AGUARDANDO_REGIAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_regiao)],
             AGUARDANDO_CONSULTA: [MessageHandler(filters.TEXT & ~filters.COMMAND, consultar)],
-            AGUARDANDO_BROADCAST: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_send_broadcast)],
+            AGUARDANDO_BROADCAST: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_send_broadcast),
+                MessageHandler(filters.PHOTO, admin_send_broadcast),
+                MessageHandler(filters.VIDEO, admin_send_broadcast),
+                MessageHandler(filters.Document.ALL, admin_send_broadcast)
+            ],
+            AGUARDANDO_CONFIRMACAO_BROADCAST: [CallbackQueryHandler(confirmar_broadcast)],
         },
         fallbacks=[CommandHandler('cancelar', cancelar)]
     )
