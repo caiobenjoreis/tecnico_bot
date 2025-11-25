@@ -1024,7 +1024,7 @@ async def receber_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"DEBUG receber_tipo: Tipo selecionado = {tipo}")
     
     # Verificar se precisa do Serial do Modem
-    tipos_com_serial = ['instalacao', 'instalacao_tv', 'mudanca_endereco']
+    tipos_com_serial = ['instalacao', 'instalacao_tv', 'mudanca_endereco', 'defeito_banda_larga', 'defeito_linha', 'defeito_tv']
     
     if tipo in tipos_com_serial:
         print(f"DEBUG receber_tipo: Tipo {tipo} requer serial, indo para AGUARDANDO_SERIAL")
