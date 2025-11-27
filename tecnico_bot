@@ -164,7 +164,8 @@ def carregar_dados():
         resp = sb.table("instalacoes").select("*").execute()
         data = resp.data or []
         return data
-    except:
+    except Exception as e:
+        print(f"❌ Erro ao carregar dados: {e}")
         return []
 
 # Salvar dados
@@ -173,11 +174,14 @@ def salvar_dados(dados):
         sb = get_supabase()
         if isinstance(dados, list):
             if dados:
-                sb.table("instalacoes").insert(dados).execute()
+                resp = sb.table("instalacoes").insert(dados).execute()
+                print(f"✅ Dados salvos com sucesso: {len(dados)} registros")
         else:
-            sb.table("instalacoes").insert(dados).execute()
-    except:
-        pass
+            resp = sb.table("instalacoes").insert(dados).execute()
+            print(f"✅ Dado salvo com sucesso")
+    except Exception as e:
+        print(f"❌ Erro ao salvar dados: {e}")
+        print(f"Dados que tentou salvar: {dados}")
 
 def carregar_usuarios():
     try:
@@ -194,7 +198,8 @@ def carregar_usuarios():
                 'telegram': r.get('telegram')
             }
         return usuarios
-    except:
+    except Exception as e:
+        print(f"❌ Erro ao carregar usuários: {e}")
         return {}
 
 def salvar_usuarios(usuarios):
@@ -210,9 +215,11 @@ def salvar_usuarios(usuarios):
                 'telegram': v.get('telegram')
             })
         if payload:
-            sb.table("usuarios").upsert(payload).execute()
-    except:
-        pass
+            resp = sb.table("usuarios").upsert(payload).execute()
+            print(f"✅ Usuários salvos com sucesso: {len(payload)} registros")
+    except Exception as e:
+        print(f"❌ Erro ao salvar usuários: {e}")
+        print(f"Payload: {payload}")
 
 def salvar_usuario(uid: str, dados_usuario: dict):
     try:
@@ -224,16 +231,20 @@ def salvar_usuario(uid: str, dados_usuario: dict):
             'regiao': dados_usuario.get('regiao'),
             'telegram': dados_usuario.get('telegram')
         }
-        sb.table("usuarios").upsert(row).execute()
-    except:
-        pass
+        resp = sb.table("usuarios").upsert(row).execute()
+        print(f"✅ Usuário salvo com sucesso: {uid}")
+    except Exception as e:
+        print(f"❌ Erro ao salvar usuário {uid}: {e}")
+        print(f"Dados do usuário: {row}")
 
 def salvar_instalacao(instalacao: dict):
     try:
         sb = get_supabase()
-        sb.table("instalacoes").insert(instalacao).execute()
-    except:
-        pass
+        resp = sb.table("instalacoes").insert(instalacao).execute()
+        print(f"✅ Instalação salva com sucesso: SA {instalacao.get('sa', 'N/A')}")
+    except Exception as e:
+        print(f"❌ Erro ao salvar instalação: {e}")
+        print(f"Dados da instalação: {instalacao}")
 
 # Comando /ajuda
 async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
