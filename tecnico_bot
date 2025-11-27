@@ -328,18 +328,21 @@ def salvar_usuario(uid: str, dados_usuario: dict):
         print(f"❌ Erro ao salvar usuário {uid}: {e}")
         print(f"Dados do usuário: {row}")
 
-def salvar_instalacao(instalacao: dict):
+def salvar_instalacao(instalacao: dict) -> bool:
     try:
         sb = get_supabase()
         if not sb:
             print("❌ Erro ao salvar instalação: Cliente Supabase não disponível.")
-            return
+            return False
 
         resp = sb.table("instalacoes").insert(instalacao).execute()
+        ok = bool(resp.data)
         print(f"✅ Instalação salva com sucesso: SA {instalacao.get('sa', 'N/A')}")
+        return ok
     except Exception as e:
         print(f"❌ Erro ao salvar instalação: {e}")
         print(f"Dados da instalação: {instalacao}")
+        return False
 
 # Comando /ajuda
 async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1340,10 +1343,10 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'serial_modem': context.user_data.get('serial_modem'),
         'data': datetime.now(TZ).strftime('%d/%m/%Y %H:%M')
     }
+    nova_instalacao = {k: v for k, v in nova_instalacao.items() if v is not None}
     
-    salvar_instalacao(nova_instalacao)
+    ok = salvar_instalacao(nova_instalacao)
     
-    # Escapar caracteres especiais do Markdown
     def escape_markdown(text):
         if text is None:
             return 'não informada'
@@ -1353,29 +1356,28 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = str(text).replace(char, f'\\{char}')
         return text
     
-    msg_parts = [
-        '✅ *Instalação registrada com sucesso\\!*\n\n',
-        f'📋 SA: `{nova_instalacao["sa"]}`\n',
-        f'🔌 GPON: `{nova_instalacao["gpon"]}`\n'
-    ]
+    if ok:
+        msg_parts = [
+            '✅ *Instalação registrada com sucesso\\!*\n\n',
+            f'📋 SA: `{nova_instalacao["sa"]}`\n',
+            f'🔌 GPON: `{nova_instalacao["gpon"]}`\n'
+        ]
     
-    if nova_instalacao.get("serial_modem"):
-        msg_parts.append(f'📟 Serial: `{nova_instalacao["serial_modem"]}`\n')
+        if nova_instalacao.get("serial_modem"):
+            msg_parts.append(f'📟 Serial: `{nova_instalacao["serial_modem"]}`\n')
     
-    msg_parts.extend([
-        f'🧩 Tipo: {escape_markdown(nova_instalacao["tipo"])}\n',
-        f'🗂️ Categoria: {escape_markdown(nova_instalacao["categoria"])}\n',
-        f'📸 Fotos: {len(nova_instalacao["fotos"])}\n',
-        f'👤 Técnico: {escape_markdown(nova_instalacao["tecnico_nome"])}\n',
-        f'📍 Região: {escape_markdown(nova_instalacao["tecnico_regiao"])}\n',
-        f'📅 Data: {escape_markdown(nova_instalacao["data"])}\n\n',
-        'Use /start para nova ação\\.'
-    ])
-    
-    await update.message.reply_text(
-        ''.join(msg_parts),
-        parse_mode='MarkdownV2'
-    )
+        msg_parts.extend([
+            f'🧩 Tipo: {escape_markdown(nova_instalacao["tipo"])}\n',
+            f'🗂️ Categoria: {escape_markdown(nova_instalacao["categoria"])}\n',
+            f'📸 Fotos: {len(nova_instalacao["fotos"])}\n',
+            f'👤 Técnico: {escape_markdown(nova_instalacao["tecnico_nome"])}\n',
+            f'📍 Região: {escape_markdown(nova_instalacao["tecnico_regiao"])}\n',
+            f'📅 Data: {escape_markdown(nova_instalacao["data"])}\n\n',
+            'Use /start para nova ação\\.'
+        ])
+        await update.message.reply_text(''.join(msg_parts), parse_mode='MarkdownV2')
+    else:
+        await update.message.reply_text('❌ Falha ao salvar no Supabase. Verifique as variáveis de ambiente, permissões (RLS) e o schema. Use /start para tentar novamente.', parse_mode='Markdown')
     
     context.user_data.clear()
     return ConversationHandler.END
