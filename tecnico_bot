@@ -160,26 +160,26 @@ def get_supabase():
         # Debug env vars
         url = SUPABASE_URL or ""
         key = SUPABASE_KEY or ""
-        print(f"🔍 Debug Supabase Config:")
-        print(f"  URL Length: {len(url)}")
-        print(f"  URL Start: {url[:8]}...")
-        print(f"  URL End: ...{url[-3:]}")
-        print(f"  Key Length: {len(key)}")
+        print(f"🔍 Debug Supabase Config:", flush=True)
+        print(f"  URL Length: {len(url)}", flush=True)
+        print(f"  URL Start: {url[:8]}...", flush=True)
+        print(f"  URL End: ...{url[-3:]}", flush=True)
+        print(f"  Key Length: {len(key)}", flush=True)
         
         # Check for common issues
         if '"' in url or "'" in url:
-            print("⚠️ WARNING: Quotes detected in SUPABASE_URL! Remove them in Render dashboard.")
+            print("⚠️ WARNING: Quotes detected in SUPABASE_URL! Remove them in Render dashboard.", flush=True)
         if ' ' in url:
-            print("⚠️ WARNING: Spaces detected in SUPABASE_URL! Remove them.")
+            print("⚠️ WARNING: Spaces detected in SUPABASE_URL! Remove them.", flush=True)
             
         def connect():
             global _SUPABASE_CLIENT
             try:
-                print(f"🔄 Connecting to Supabase (Thread)...")
+                print(f"🔄 Connecting to Supabase (Thread)...", flush=True)
                 _SUPABASE_CLIENT = create_client(url, key)
-                print("✅ Supabase client created (Thread).")
+                print("✅ Supabase client created (Thread).", flush=True)
             except Exception as e:
-                print(f"❌ Failed to create Supabase client: {e}")
+                print(f"❌ Failed to create Supabase client: {e}", flush=True)
 
         # Run connection in a thread with timeout
         t = threading.Thread(target=connect)
@@ -188,31 +188,56 @@ def get_supabase():
         t.join(timeout=10) # Wait 10 seconds max
         
         if t.is_alive():
-            print("❌ Timeout: Supabase connection took too long (>10s). Skipping.")
+            print("❌ Timeout: Supabase connection took too long (>10s). Skipping.", flush=True)
             return None
             
     return _SUPABASE_CLIENT
 
 def check_supabase_health():
     """Verifica se a conexão com o Supabase está funcionando"""
-    print("🏥 Iniciando verificação de saúde do Supabase...")
+    print("🏥 Iniciando verificação de saúde do Supabase...", flush=True)
     if not USE_SUPABASE:
-        print("❌ Supabase não configurado (URL ou KEY ausentes).")
+        print("❌ Supabase não configurado (URL ou KEY ausentes).", flush=True)
         return False
     
     try:
         sb = get_supabase()
         if not sb:
-            print("❌ Cliente Supabase não pôde ser criado.")
+            print("❌ Cliente Supabase não pôde ser criado.", flush=True)
             return False
             
-        # Tenta fazer uma query simples
-        print("🔄 Testando query no Supabase...")
-        resp = sb.table("instalacoes").select("count", count="exact").limit(1).execute()
-        print(f"✅ Conexão Supabase OK! Resposta: {resp}")
-        return True
+        # Tenta fazer uma query simples com timeout
+        print("🔄 Testando query no Supabase...", flush=True)
+        
+        import threading
+        result = {'success': False, 'resp': None, 'error': None}
+        
+        def run_query():
+            try:
+                # Usando count='exact' e head=True para ser mais leve
+                result['resp'] = sb.table("instalacoes").select("count", count="exact").limit(1).execute()
+                result['success'] = True
+            except Exception as e:
+                result['error'] = e
+
+        t = threading.Thread(target=run_query)
+        t.daemon = True
+        t.start()
+        t.join(timeout=10)
+        
+        if t.is_alive():
+            print("❌ Timeout: Query no Supabase demorou mais de 10s.", flush=True)
+            return False
+            
+        if result['success']:
+            print(f"✅ Conexão Supabase OK! Resposta: {result['resp']}", flush=True)
+            return True
+        else:
+            print(f"❌ Erro na query do Supabase: {result['error']}", flush=True)
+            return False
+            
     except Exception as e:
-        print(f"❌ Erro na verificação de saúde do Supabase: {e}")
+        print(f"❌ Erro na verificação de saúde do Supabase: {e}", flush=True)
         return False
 
 # Carregar dados existentes
