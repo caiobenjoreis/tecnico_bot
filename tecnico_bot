@@ -152,10 +152,39 @@ def montar_msg_producao(instalacoes_user: list, inicio: datetime, fim: datetime,
 def get_supabase():
     global _SUPABASE_CLIENT
     if not USE_SUPABASE:
+        print("⚠️ USE_SUPABASE is False. Check environment variables.")
         return None
     if _SUPABASE_CLIENT is None:
-        _SUPABASE_CLIENT = create_client(SUPABASE_URL, SUPABASE_KEY)
+        try:
+            print(f"🔄 Connecting to Supabase at {SUPABASE_URL}...")
+            _SUPABASE_CLIENT = create_client(SUPABASE_URL, SUPABASE_KEY)
+            print("✅ Supabase client created.")
+        except Exception as e:
+            print(f"❌ Failed to create Supabase client: {e}")
+            return None
     return _SUPABASE_CLIENT
+
+def check_supabase_health():
+    """Verifica se a conexão com o Supabase está funcionando"""
+    print("🏥 Iniciando verificação de saúde do Supabase...")
+    if not USE_SUPABASE:
+        print("❌ Supabase não configurado (URL ou KEY ausentes).")
+        return False
+    
+    try:
+        sb = get_supabase()
+        if not sb:
+            print("❌ Cliente Supabase não pôde ser criado.")
+            return False
+            
+        # Tenta fazer uma query simples
+        print("🔄 Testando query no Supabase...")
+        resp = sb.table("instalacoes").select("count", count="exact").limit(1).execute()
+        print(f"✅ Conexão Supabase OK! Resposta: {resp}")
+        return True
+    except Exception as e:
+        print(f"❌ Erro na verificação de saúde do Supabase: {e}")
+        return False
 
 # Carregar dados existentes
 def carregar_dados():
@@ -172,6 +201,10 @@ def carregar_dados():
 def salvar_dados(dados):
     try:
         sb = get_supabase()
+        if not sb:
+            print("❌ Erro ao salvar dados: Cliente Supabase não disponível.")
+            return
+            
         if isinstance(dados, list):
             if dados:
                 resp = sb.table("instalacoes").insert(dados).execute()
@@ -224,6 +257,10 @@ def salvar_usuarios(usuarios):
 def salvar_usuario(uid: str, dados_usuario: dict):
     try:
         sb = get_supabase()
+        if not sb:
+            print(f"❌ Erro ao salvar usuário {uid}: Cliente Supabase não disponível.")
+            return
+
         row = {
             'id': int(uid) if str(uid).isdigit() else str(uid),
             'nome': dados_usuario.get('nome') or '',
@@ -240,6 +277,10 @@ def salvar_usuario(uid: str, dados_usuario: dict):
 def salvar_instalacao(instalacao: dict):
     try:
         sb = get_supabase()
+        if not sb:
+            print("❌ Erro ao salvar instalação: Cliente Supabase não disponível.")
+            return
+
         resp = sb.table("instalacoes").insert(instalacao).execute()
         print(f"✅ Instalação salva com sucesso: SA {instalacao.get('sa', 'N/A')}")
     except Exception as e:
@@ -1583,6 +1624,9 @@ def main():
     
     # Iniciar servidor web falso para manter o bot vivo no Render
     keep_alive()
+    
+    # Verificar saúde do Supabase
+    check_supabase_health()
     
     print('🤖 Bot iniciado (polling)! Aguardando mensagens...')
     app.run_polling()
