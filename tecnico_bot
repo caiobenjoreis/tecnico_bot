@@ -152,16 +152,45 @@ def montar_msg_producao(instalacoes_user: list, inicio: datetime, fim: datetime,
 def get_supabase():
     global _SUPABASE_CLIENT
     if not USE_SUPABASE:
-        print("⚠️ USE_SUPABASE is False. Check environment variables.")
         return None
+    
     if _SUPABASE_CLIENT is None:
-        try:
-            print(f"🔄 Connecting to Supabase at {SUPABASE_URL}...")
-            _SUPABASE_CLIENT = create_client(SUPABASE_URL, SUPABASE_KEY)
-            print("✅ Supabase client created.")
-        except Exception as e:
-            print(f"❌ Failed to create Supabase client: {e}")
+        import threading
+        
+        # Debug env vars
+        url = SUPABASE_URL or ""
+        key = SUPABASE_KEY or ""
+        print(f"🔍 Debug Supabase Config:")
+        print(f"  URL Length: {len(url)}")
+        print(f"  URL Start: {url[:8]}...")
+        print(f"  URL End: ...{url[-3:]}")
+        print(f"  Key Length: {len(key)}")
+        
+        # Check for common issues
+        if '"' in url or "'" in url:
+            print("⚠️ WARNING: Quotes detected in SUPABASE_URL! Remove them in Render dashboard.")
+        if ' ' in url:
+            print("⚠️ WARNING: Spaces detected in SUPABASE_URL! Remove them.")
+            
+        def connect():
+            global _SUPABASE_CLIENT
+            try:
+                print(f"🔄 Connecting to Supabase (Thread)...")
+                _SUPABASE_CLIENT = create_client(url, key)
+                print("✅ Supabase client created (Thread).")
+            except Exception as e:
+                print(f"❌ Failed to create Supabase client: {e}")
+
+        # Run connection in a thread with timeout
+        t = threading.Thread(target=connect)
+        t.daemon = True
+        t.start()
+        t.join(timeout=10) # Wait 10 seconds max
+        
+        if t.is_alive():
+            print("❌ Timeout: Supabase connection took too long (>10s). Skipping.")
             return None
+            
     return _SUPABASE_CLIENT
 
 def check_supabase_health():
