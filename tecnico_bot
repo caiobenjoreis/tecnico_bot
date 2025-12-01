@@ -1113,7 +1113,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'registrar_reparo':
         context.user_data['modo_registro'] = 'reparo'
         await query.edit_message_text(
-        await query.edit_message_text(
+
             '🛠️ *Novo Reparo* [Etapa 1/5]\n\n'
             'Digite o *número da SA*:\n'
             '💡 Exemplo: 12345678\n\n'
