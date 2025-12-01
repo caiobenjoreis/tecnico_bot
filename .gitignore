@@ -1,4 +1,18 @@
+# Arquivos a ignorar no Git
 __pycache__/
 *.pyc
 .env
 *.json
+
+# Testes (não necessário em produção)
+test_logic.py
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Sistema
+.DS_Store
+Thumbs.db
