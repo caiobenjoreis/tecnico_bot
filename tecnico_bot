@@ -1390,6 +1390,46 @@ async def receber_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AGUARDANDO_FOTOS
     return AGUARDANDO_FOTOS
 
+async def receber_serial(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    serial = update.message.text.strip()
+    context.user_data['serial_modem'] = serial
+    
+    # Se for Instalação + Mesh, pedir serial do Mesh
+    if context.user_data.get('tipo') == 'instalacao_mesh':
+        await update.message.reply_text(
+            '✅ *Serial do Modem Registrado!*\n\n'
+            '📝 [Etapa 5/6]\n'
+            'Agora envie o *Serial do Roteador Mesh*:\n'
+            '💡 Exemplo: MESH123...\n\n'
+            '_(Ou digite /cancelar para sair)_',
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_SERIAL_MESH
+    
+    await update.message.reply_text(
+        '✅ *Serial Registrado!*\n\n'
+        '📝 [Etapa 5/5]\n'
+        'Agora envie as *3 fotos* da instalação.\n'
+        '💡 Tire fotos claras do equipamento e instalação\n\n'
+        'Quando terminar, digite /finalizar',
+        parse_mode='Markdown'
+    )
+    return AGUARDANDO_FOTOS
+
+async def receber_serial_mesh(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    serial_mesh = update.message.text.strip()
+    context.user_data['serial_mesh'] = serial_mesh
+    
+    await update.message.reply_text(
+        '✅ *Serial Mesh Registrado!*\n\n'
+        '📝 [Etapa 6/6]\n'
+        'Agora envie as *3 fotos* da instalação.\n'
+        '💡 Tire fotos claras do equipamento e instalação\n\n'
+        'Quando terminar, digite /finalizar',
+        parse_mode='Markdown'
+    )
+    return AGUARDANDO_FOTOS
+
 # Finalizar registro
 async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'sa' not in context.user_data or 'gpon' not in context.user_data:
