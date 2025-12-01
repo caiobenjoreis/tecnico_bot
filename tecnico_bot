@@ -1,19 +1,18 @@
 import os
-import json
 from datetime import datetime, timedelta
 from collections import defaultdict
+import csv
+import io
 from zoneinfo import ZoneInfo
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters, ContextTypes
-from supabase import create_client, Client
+from supabase import create_client
 from keep_alive import keep_alive
 
 # Estados da conversa
-AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_TIPO, AGUARDANDO_SERIAL, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO, AGUARDANDO_CONSULTA, AGUARDANDO_BROADCAST, AGUARDANDO_CONFIRMACAO_BROADCAST = range(13)
+AGUARDANDO_SA, AGUARDANDO_GPON, AGUARDANDO_TIPO, AGUARDANDO_SERIAL, AGUARDANDO_SERIAL_MESH, AGUARDANDO_FOTOS, AGUARDANDO_DATA_INICIO, AGUARDANDO_DATA_FIM, AGUARDANDO_NOME, AGUARDANDO_SOBRENOME, AGUARDANDO_REGIAO, AGUARDANDO_CONSULTA, AGUARDANDO_BROADCAST, AGUARDANDO_CONFIRMACAO_BROADCAST = range(14)
 
-# Arquivo para salvar os dados
-DADOS_FILE = 'instalacoes.json'
-USUARIOS_FILE = 'usuarios.json'
+
 TZ = ZoneInfo("America/Sao_Paulo")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -33,6 +32,7 @@ PONTOS_SERVICO = {
     'defeito_tv': 1.43,
     'instalacao': 2.28,
     'instalacao_tv': 3.58,
+    'instalacao_mesh': 2.91,
     'mudanca_endereco': 2.37,
     'retirada': 1.06,
     'servicos': 1.50,
@@ -157,14 +157,8 @@ def get_supabase():
     if _SUPABASE_CLIENT is None:
         import threading
         
-        # Debug env vars
         url = SUPABASE_URL or ""
         key = SUPABASE_KEY or ""
-        print(f"🔍 Debug Supabase Config:", flush=True)
-        print(f"  URL Length: {len(url)}", flush=True)
-        print(f"  URL Start: {url[:8]}...", flush=True)
-        print(f"  URL End: ...{url[-3:]}", flush=True)
-        print(f"  Key Length: {len(key)}", flush=True)
         
         # Check for common issues
         if '"' in url or "'" in url:
@@ -252,23 +246,7 @@ def carregar_dados():
         return []
 
 # Salvar dados
-def salvar_dados(dados):
-    try:
-        sb = get_supabase()
-        if not sb:
-            print("❌ Erro ao salvar dados: Cliente Supabase não disponível.")
-            return
-            
-        if isinstance(dados, list):
-            if dados:
-                resp = sb.table("instalacoes").insert(dados).execute()
-                print(f"✅ Dados salvos com sucesso: {len(dados)} registros")
-        else:
-            resp = sb.table("instalacoes").insert(dados).execute()
-            print(f"✅ Dado salvo com sucesso")
-    except Exception as e:
-        print(f"❌ Erro ao salvar dados: {e}")
-        print(f"Dados que tentou salvar: {dados}")
+
 
 def carregar_usuarios():
     try:
@@ -289,24 +267,7 @@ def carregar_usuarios():
         print(f"❌ Erro ao carregar usuários: {e}")
         return {}
 
-def salvar_usuarios(usuarios):
-    try:
-        sb = get_supabase()
-        payload = []
-        for k, v in (usuarios or {}).items():
-            payload.append({
-                'id': int(k) if str(k).isdigit() else str(k),
-                'nome': v.get('nome') or '',
-                'sobrenome': v.get('sobrenome') or '',
-                'regiao': v.get('regiao'),
-                'telegram': v.get('telegram')
-            })
-        if payload:
-            resp = sb.table("usuarios").upsert(payload).execute()
-            print(f"✅ Usuários salvos com sucesso: {len(payload)} registros")
-    except Exception as e:
-        print(f"❌ Erro ao salvar usuários: {e}")
-        print(f"Payload: {payload}")
+
 
 def salvar_usuario(uid: str, dados_usuario: dict):
     try:
@@ -399,16 +360,20 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📊 Estatísticas Gerais", callback_data='admin_stats')],
         [InlineKeyboardButton("👥 Listar Técnicos", callback_data='admin_users')],
         [InlineKeyboardButton("📋 Todas Instalações", callback_data='admin_all_installs')],
-        [InlineKeyboardButton("� Enviar Mensagem para Todos", callback_data='admin_broadcast')],
-        [InlineKeyboardButton("�📤 Exportar Dados", callback_data='admin_export')],
+        [InlineKeyboardButton("📢 Enviar Mensagem para Todos", callback_data='admin_broadcast')],
+        [InlineKeyboardButton("📤 Exportar Dados", callback_data='admin_export')],
         [InlineKeyboardButton("🔧 Gerenciar Admins", callback_data='admin_manage')],
         [InlineKeyboardButton("🔙 Voltar", callback_data='voltar')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        '🎛️ *Painel de Administração*\n\n'
-        'Escolha uma opção:',
+        '━━━━━━━━━━━━━━━━━━━━\n'
+        '👑 *PAINEL ADMINISTRATIVO*\n'
+        '━━━━━━━━━━━━━━━━━━━━\n\n'
+        '🔐 Acesso: Administrador\n'
+        f'📅 {datetime.now(TZ).strftime("%d/%m/%Y %H:%M")}\n\n'
+        'Selecione uma opção:',
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -418,53 +383,68 @@ async def admin_stats(query):
     dados = carregar_dados()
     usuarios = carregar_usuarios()
     
-    # Estatísticas gerais
+    agora = datetime.now(TZ)
+    mes_atual = agora.month
+    ano_atual = agora.year
+    
+    # Calcular mês anterior
+    if mes_atual == 1:
+        mes_anterior = 12
+        ano_anterior = ano_atual - 1
+    else:
+        mes_anterior = mes_atual - 1
+        ano_anterior = ano_atual
+        
+    # Estatísticas
     total_instalacoes = len(dados)
     total_tecnicos = len(usuarios)
     
-    # Instalações por tipo
-    por_tipo = defaultdict(int)
-    por_categoria = defaultdict(int)
-    for inst in dados:
-        por_tipo[inst.get('tipo', 'instalacao')] += 1
-        por_categoria[inst.get('categoria', 'instalacao')] += 1
+    inst_mes_atual = 0
+    inst_mes_anterior = 0
+    por_regiao = defaultdict(int)
     
-    # Instalações nos últimos 7 dias
-    agora = datetime.now(TZ)
-    sete_dias_atras = agora - timedelta(days=7)
-    instalacoes_semana = 0
     for inst in dados:
         try:
             data_inst = datetime.strptime(inst['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
-            if data_inst >= sete_dias_atras:
-                instalacoes_semana += 1
+            
+            # Contagem por mês
+            if data_inst.month == mes_atual and data_inst.year == ano_atual:
+                inst_mes_atual += 1
+            elif data_inst.month == mes_anterior and data_inst.year == ano_anterior:
+                inst_mes_anterior += 1
+                
+            # Contagem por região
+            regiao = inst.get('tecnico_regiao') or 'Não informada'
+            por_regiao[regiao] += 1
         except:
             continue
+            
+    # Calcular crescimento
+    crescimento = 0
+    if inst_mes_anterior > 0:
+        crescimento = ((inst_mes_atual - inst_mes_anterior) / inst_mes_anterior) * 100
     
-    # Top 5 técnicos
-    por_tecnico = defaultdict(int)
-    for inst in dados:
-        por_tecnico[inst['tecnico_nome']] += 1
-    top_tecnicos = sorted(por_tecnico.items(), key=lambda x: x[1], reverse=True)[:5]
+    sinal = "+" if crescimento >= 0 else ""
     
-    # Escapar underscores para Markdown
-    def escape_md(text):
-        return str(text).replace('_', '\\_')
+    # Top Regiões
+    top_regioes = sorted(por_regiao.items(), key=lambda x: x[1], reverse=True)[:3]
     
     msg = (
-        f'📊 *Estatísticas Gerais*\n\n'
-        f'👥 *Técnicos cadastrados:* {total_tecnicos}\n'
-        f'📦 *Total de instalações:* {total_instalacoes}\n'
-        f'📅 *Últimos 7 dias:* {instalacoes_semana}\n\n'
-        f'📋 *Por Tipo:*\n'
+        '━━━━━━━━━━━━━━━━━━━━\n'
+        '📊 *ESTATÍSTICAS AVANÇADAS*\n'
+        '━━━━━━━━━━━━━━━━━━━━\n\n'
+        f'👥 *Técnicos:* {total_tecnicos}\n'
+        f'📦 *Total Geral:* {total_instalacoes}\n\n'
+        '📅 *Comparativo Mensal*\n'
+        f'• Este Mês: *{inst_mes_atual}*\n'
+        f'• Mês Passado: *{inst_mes_anterior}*\n'
+        f'📈 Crescimento: *{sinal}{crescimento:.1f}%*\n\n'
+        '🏆 *Top Regiões*\n'
     )
     
-    for tipo, qtd in sorted(por_tipo.items(), key=lambda x: x[1], reverse=True):
-        msg += f'  • {escape_md(tipo)}: {qtd}\n'
-    
-    msg += '\n🏆 *Top 5 Técnicos:*\n'
-    for idx, (tecnico, qtd) in enumerate(top_tecnicos, 1):
-        msg += f'{idx}. {escape_md(tecnico)}: {qtd} instalações\n'
+    for idx, (regiao, qtd) in enumerate(top_regioes, 1):
+        barra = "█" * min(int(qtd/5) + 1, 10)
+        msg += f'{idx}. {regiao}: *{qtd}* ({barra})\n'
     
     await query.edit_message_text(msg, parse_mode='Markdown')
 
@@ -484,18 +464,30 @@ async def admin_list_users(query):
     def escape_md(text):
         return str(text).replace('_', '\\_')
     
-    msg = f'👥 *Técnicos Cadastrados ({len(usuarios)})*\n\n'
+    msg = (
+        '━━━━━━━━━━━━━━━━━━━━\n'
+        f'👥 *TÉCNICOS ({len(usuarios)})*\n'
+        '━━━━━━━━━━━━━━━━━━━━\n\n'
+    )
     
-    for user_id, dados_user in sorted(usuarios.items(), key=lambda x: instalacoes_por_tecnico.get(x[0], 0), reverse=True):
+    # Ordenar por número de instalações
+    lista_ordenada = sorted(usuarios.items(), key=lambda x: instalacoes_por_tecnico.get(x[0], 0), reverse=True)
+    
+    # Paginação simples (top 20)
+    for user_id, dados_user in lista_ordenada[:20]:
         nome_completo = f"{dados_user.get('nome', '')} {dados_user.get('sobrenome', '')}".strip()
         regiao = dados_user.get('regiao', 'N/A')
-        qtd_instalacoes = instalacoes_por_tecnico.get(user_id, 0)
-        is_adm = '👑' if int(user_id) in ADMIN_IDS else ''
+        qtd = instalacoes_por_tecnico.get(user_id, 0)
+        uid_int = int(user_id) if str(user_id).isdigit() else None
+        is_adm = '👑 ' if (uid_int is not None and uid_int in ADMIN_IDS) else ''
         
-        msg += f'{is_adm} *{escape_md(nome_completo)}*\n'
-        msg += f'  ID: `{user_id}`\n'
-        msg += f'  Região: {escape_md(regiao)}\n'
-        msg += f'  Instalações: {qtd_instalacoes}\n\n'
+        msg += f'{is_adm}*{escape_md(nome_completo)}*\n'
+        msg += f'🆔 `{user_id}` | 📍 {escape_md(regiao)}\n'
+        msg += f'📦 {qtd} instalações\n'
+        msg += '───────────────\n'
+        
+    if len(lista_ordenada) > 20:
+        msg += f'\n_E mais {len(lista_ordenada) - 20} técnicos..._'
     
     await query.edit_message_text(msg, parse_mode='Markdown')
 
@@ -522,24 +514,54 @@ async def admin_all_installations(query):
     await query.edit_message_text(msg, parse_mode='Markdown')
 
 async def admin_export_data(query):
-    """Exporta dados em formato texto"""
+    """Exporta dados em formato CSV"""
+    await query.edit_message_text('⏳ Gerando arquivo CSV, aguarde...')
+    
     dados = carregar_dados()
-    usuarios = carregar_usuarios()
     
-    # Criar relatório completo
-    agora = datetime.now(TZ).strftime('%d/%m/%Y %H:%M')
+    if not dados:
+        await query.edit_message_text('❌ Não há dados para exportar.')
+        return
+
+    # Criar buffer em memória
+    output = io.StringIO()
+    writer = csv.writer(output)
     
-    msg = f'📤 *Exportação de Dados*\n'
-    msg += f'Data: {agora}\n\n'
-    msg += f'Total de instalações: {len(dados)}\n'
-    msg += f'Total de técnicos: {len(usuarios)}\n\n'
-    msg += '💾 Para exportar dados completos, acesse o Supabase Dashboard:\n'
-    msg += f'{SUPABASE_URL if SUPABASE_URL else "Configure SUPABASE_URL"}\n\n'
-    msg += '📊 Você também pode usar os comandos:\n'
-    msg += '/mensal - Relatório mensal\n'
-    msg += '/semanal - Relatório semanal\n'
+    # Cabeçalho
+    writer.writerow(['Data', 'SA', 'GPON', 'Tipo', 'Categoria', 'Técnico', 'Região', 'Serial Modem', 'Serial Mesh'])
     
-    await query.edit_message_text(msg, parse_mode='Markdown')
+    # Dados
+    for inst in dados:
+        writer.writerow([
+            inst.get('data', ''),
+            inst.get('sa', ''),
+            inst.get('gpon', ''),
+            inst.get('tipo', ''),
+            inst.get('categoria', ''),
+            inst.get('tecnico_nome', ''),
+            inst.get('tecnico_regiao', ''),
+            inst.get('serial_modem', ''),
+            inst.get('serial_mesh', '')
+        ])
+    
+    # Preparar arquivo para envio
+    output.seek(0)
+    csv_bytes = output.getvalue().encode('utf-8-sig') # BOM para Excel abrir direito
+    
+    agora_str = datetime.now(TZ).strftime('%Y-%m-%d_%H-%M')
+    filename = f'instalacoes_{agora_str}.csv'
+    
+    try:
+        await query.message.reply_document(
+            document=csv_bytes,
+            filename=filename,
+            caption=f'📊 *Exportação Completa*\n📅 {datetime.now(TZ).strftime("%d/%m/%Y %H:%M")}\n📦 Total: {len(dados)} registros',
+            parse_mode='Markdown'
+        )
+        # Restaurar menu
+        await admin_panel(query, None) # Gambiarra para voltar ao menu, ideal seria mandar mensagem separada
+    except Exception as e:
+        await query.edit_message_text(f'❌ Erro ao enviar arquivo: {str(e)}')
 
 async def admin_manage_admins(query):
     """Gerenciar administradores"""
@@ -817,7 +839,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     usuarios = carregar_usuarios()
     if str(user_id) not in usuarios:
         context.user_data['ident'] = {}
-        await update.message.reply_text('👤 Primeiro acesso. Informe seu nome:\n_(Ou /cancelar para sair)_')
+        await update.message.reply_text(
+            '👋 *Bem-vindo ao TÉCNICO BOT!*\n\n'
+            'Para começar, vamos configurar seu perfil.\n\n'
+            '📝 Por favor, informe seu *primeiro nome*:\n'
+            '_(Digite /cancelar a qualquer momento para sair)_'
+        )
         return AGUARDANDO_NOME
     keyboard = [
         [InlineKeyboardButton("🆕 Registrar Instalação", callback_data='registrar')],
@@ -829,8 +856,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        '🛠️ *Bot de Registro de Instalações*\n\n'
-        'Bem-vindo! Escolha uma opção:',
+        '━━━━━━━━━━━━━━━━━━━━\n'
+        '🛠️ *TÉCNICO BOT*\n'
+        '━━━━━━━━━━━━━━━━━━━━\n\n'
+        f'👋 Olá, *{username}*!\n'
+        f'📅 {datetime.now(TZ).strftime("%d/%m/%Y")}\n\n'
+        'Escolha uma opção abaixo:',
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -839,13 +870,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receber_nome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.setdefault('ident', {})
     context.user_data['ident']['nome'] = update.message.text.strip()
-    await update.message.reply_text('Informe seu sobrenome:\n_(Ou /cancelar para sair)_')
+    await update.message.reply_text(
+        '📝 Ótimo! Agora informe seu *sobrenome*:\n'
+        '_(Ou /cancelar para sair)_'
+    )
     return AGUARDANDO_SOBRENOME
 
 async def receber_sobrenome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.setdefault('ident', {})
     context.user_data['ident']['sobrenome'] = update.message.text.strip()
-    await update.message.reply_text('Informe sua região de atuação:\n_(Ou /cancelar para sair)_')
+    await update.message.reply_text(
+        '📍 Para finalizar, informe sua *região de atuação*:\n'
+        '_(Ou /cancelar para sair)_'
+    )
     return AGUARDANDO_REGIAO
 
 async def receber_regiao(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -924,9 +961,14 @@ def gerar_relatorio_mensal():
     
     # Montar relatório
     nome_mes = agora.strftime('%B/%Y')
-    msg = f'📅 *Relatório Mensal - {nome_mes}*\n\n'
-    msg += f'📊 *Total de Instalações:* {len(instalacoes_mes)}\n\n'
-    msg += '👥 *Por Técnico:*\n'
+    msg = (
+        '━━━━━━━━━━━━━━━━━━━━\n'
+        '📅 *RELATÓRIO MENSAL*\n'
+        '━━━━━━━━━━━━━━━━━━━━\n\n'
+        f'📆 Período: *{nome_mes}*\n'
+        f'📊 Total: *{len(instalacoes_mes)} instalações*\n\n'
+        '👥 *Por Técnico:*\n'
+    )
     
     # Ordenar por quantidade (maior para menor)
     tecnicos_ordenados = sorted(por_tecnico.items(), key=lambda x: x[1], reverse=True)
@@ -966,10 +1008,14 @@ def gerar_relatorio_semanal():
         por_tecnico[inst['tecnico_nome']] += 1
     
     # Montar relatório
-    msg = f'📊 *Relatório Semanal*\n'
-    msg += f'Período: {inicio_semana.strftime("%d/%m")} até {agora.strftime("%d/%m/%Y")}\n\n'
-    msg += f'📊 *Total de Instalações:* {len(instalacoes_semana)}\n\n'
-    msg += '👥 *Por Técnico:*\n'
+    msg = (
+        '━━━━━━━━━━━━━━━━━━━━\n'
+        '📊 *RELATÓRIO SEMANAL*\n'
+        '━━━━━━━━━━━━━━━━━━━━\n\n'
+        f'📆 Período: {inicio_semana.strftime("%d/%m")} a {agora.strftime("%d/%m/%Y")}\n'
+        f'📊 Total: *{len(instalacoes_semana)} instalações*\n\n'
+        '👥 *Por Técnico:*\n'
+    )
     
     tecnicos_ordenados = sorted(por_tecnico.items(), key=lambda x: x[1], reverse=True)
     for tecnico, quantidade in tecnicos_ordenados:
@@ -1006,9 +1052,14 @@ def gerar_relatorio_hoje():
         por_tecnico[inst['tecnico_nome']] += 1
     
     # Montar relatório
-    msg = f'📈 *Relatório de Hoje - {agora.strftime("%d/%m/%Y")}*\n\n'
-    msg += f'📊 *Total de Instalações:* {len(instalacoes_hoje)}\n\n'
-    msg += '👥 *Por Técnico:*\n'
+    msg = (
+        '━━━━━━━━━━━━━━━━━━━━\n'
+        '📈 *RELATÓRIO DE HOJE*\n'
+        '━━━━━━━━━━━━━━━━━━━━\n\n'
+        f'📅 Data: *{agora.strftime("%d/%m/%Y")}*\n'
+        f'📊 Total: *{len(instalacoes_hoje)} instalações*\n\n'
+        '👥 *Por Técnico:*\n'
+    )
     
     tecnicos_ordenados = sorted(por_tecnico.items(), key=lambda x: x[1], reverse=True)
     for tecnico, quantidade in tecnicos_ordenados:
@@ -1051,9 +1102,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == 'registrar':
         context.user_data['modo_registro'] = 'instalacao'
         await query.edit_message_text(
-            '🆕 *Nova Instalação*\n\n'
-            'Por favor, envie o *número da SA*:\n'
-            '_(Ou digite /cancelar para voltar)_',
+            '📝 *Nova Instalação* [Etapa 1/5]\n\n'
+            'Digite o *número da SA*:\n'
+            '💡 Exemplo: 12345678\n\n'
+            '_(Digite /cancelar para voltar ao menu)_',
             parse_mode='Markdown'
         )
         return AGUARDANDO_SA
@@ -1061,17 +1113,25 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'registrar_reparo':
         context.user_data['modo_registro'] = 'reparo'
         await query.edit_message_text(
-            '🛠️ *Novo Reparo*\n\n'
-            'Por favor, envie o *número da SA:*:\n'
-            '_(Ou digite /cancelar para voltar)_',
+        await query.edit_message_text(
+            '🛠️ *Novo Reparo* [Etapa 1/5]\n\n'
+            'Digite o *número da SA*:\n'
+            '💡 Exemplo: 12345678\n\n'
+            '_(Digite /cancelar para voltar ao menu)_',
             parse_mode='Markdown'
         )
         return AGUARDANDO_SA
     
     elif query.data == 'consultar':
         await query.edit_message_text(
-            '🔎 *Consultar Instalação*\n\n'
-            'Digite o número da SA ou do GPON para buscar:',
+            '━━━━━━━━━━━━━━━━━━━━\n'
+            '� *CONSULTAR INSTALAÇÃO*\n'
+            '━━━━━━━━━━━━━━━━━━━━\n\n'
+            'Digite o *número da SA* ou *GPON*:\n\n'
+            '💡 Exemplos:\n'
+            '• SA: 12345678\n'
+            '• GPON: ABCD1234\n\n'
+            '🔎 A busca é automática e encontra resultados parciais',
             parse_mode='Markdown'
         )
         return AGUARDANDO_CONSULTA
@@ -1201,7 +1261,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
-            '🛠️ *Bot de Registro de Instalações*\n\n'
+            '━━━━━━━━━━━━━━━━━━━━\n'
+            '🛠️ *TÉCNICO BOT*\n'
+            '━━━━━━━━━━━━━━━━━━━━\n\n'
             'Bem-vindo! Escolha uma opção:',
             reply_markup=reply_markup,
             parse_mode='Markdown'
@@ -1214,9 +1276,12 @@ async def receber_sa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Validação removida a pedido do usuário
     context.user_data['sa'] = sa
     await update.message.reply_text(
-        '✅ SA registrada!\n\n'
-        'Agora envie o *GPON*:\n'
-        '_(Ou digite /cancelar para sair)_',
+        f'✅ *SA Registrada com Sucesso!*\n'
+        f'📋 SA: `{sa}`\n\n'
+        f'📝 [Etapa 2/5]\n'
+        f'Agora digite o *GPON*:\n'
+        f'💡 Exemplo: ABCD1234\n\n'
+        f'_(Digite /cancelar para voltar)_',
         parse_mode='Markdown'
     )
     return AGUARDANDO_GPON
@@ -1237,15 +1302,26 @@ async def receber_gpon(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton('Retirada', callback_data='retirada')],
             [InlineKeyboardButton('Serviços', callback_data='servicos')]
         ]
-        prompt = '✅ GPON registrado!\n\nSelecione o *tipo de reparo*:'
+        prompt = (
+        '✅ *GPON Registrado!*\n'
+        f'🔌 GPON: `{gpon}`\n\n'
+        '📝 [Etapa 3/5]\n'
+        'Selecione o *tipo de reparo*:'
+    )
     else:
         keyboard = [
             [InlineKeyboardButton('Instalação', callback_data='instalacao')],
             [InlineKeyboardButton('Instalação TV', callback_data='instalacao_tv')],
+            [InlineKeyboardButton('Instalação + Mesh', callback_data='instalacao_mesh')],
             [InlineKeyboardButton('Mudança de Endereço', callback_data='mudanca_endereco')],
             [InlineKeyboardButton('Serviços', callback_data='servicos')]
         ]
-        prompt = '✅ GPON registrado!\n\nSelecione o *tipo de serviço*:'
+        prompt = (
+        '✅ *GPON Registrado!*\n'
+        f'🔌 GPON: `{gpon}`\n\n'
+        '📝 [Etapa 3/5]\n'
+        'Selecione o *tipo de serviço*:'
+    )
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(prompt, reply_markup=reply_markup, parse_mode='Markdown')
     return AGUARDANDO_TIPO
@@ -1264,13 +1340,21 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if num_fotos < 3:
         await update.message.reply_text(
-            f'✅ Foto {num_fotos}/3 recebida!\n'
-            f'Envie mais {3 - num_fotos} foto(s) ou /finalizar se já enviou todas.'
+            f'✅ *Foto Recebida!*\n\n'
+            f'📸 Progresso: {num_fotos}/3 fotos\n'
+            f'{"🟢" * num_fotos}{"⚪" * (3-num_fotos)}\n\n'
+            f'📤 Envie mais {3 - num_fotos} foto(s)\n'
+            '💡 Digite /finalizar se já enviou todas.',
+            parse_mode='Markdown'
         )
     else:
         await update.message.reply_text(
-            f'✅ {num_fotos} fotos recebidas!\n'
-            'Digite /finalizar para salvar a instalação.'
+            f'✅ *Todas as fotos recebidas!*\n\n'
+            f'📸 Progresso: {num_fotos}/3 fotos\n'
+            f'{"🟢" * 3}\n\n'
+            '✨ Tudo pronto!\n'
+            'Digite /finalizar para salvar a instalação.',
+            parse_mode='Markdown'
         )
     
     return AGUARDANDO_FOTOS
@@ -1280,43 +1364,30 @@ async def receber_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     tipo = query.data
     context.user_data['tipo'] = tipo
-    print(f"DEBUG receber_tipo: Tipo selecionado = {tipo}")
     
     # Verificar se precisa do Serial do Modem
-    tipos_com_serial = ['instalacao', 'instalacao_tv', 'mudanca_endereco', 'defeito_banda_larga', 'defeito_linha', 'defeito_tv']
+    tipos_com_serial = ['instalacao', 'instalacao_tv', 'instalacao_mesh', 'mudanca_endereco', 'defeito_banda_larga', 'defeito_linha', 'defeito_tv']
     
     if tipo in tipos_com_serial:
-        print(f"DEBUG receber_tipo: Tipo {tipo} requer serial, indo para AGUARDANDO_SERIAL")
         await query.edit_message_text(
-            '✅ Tipo selecionado!\n\n'
-            '📟 Agora envie o *Número de Série do Modem*:\n'
+            '✅ *Tipo Selecionado!*\n\n'
+            '� [Etapa 4/5]\n'
+            'Agora envie o *Número de Série do Modem*:\n'
+            '💡 Exemplo: ZTEGC8...\n\n'
             '_(Ou digite /cancelar para sair)_',
             parse_mode='Markdown'
         )
         return AGUARDANDO_SERIAL
     else:
-        print(f"DEBUG receber_tipo: Tipo {tipo} não requer serial, indo para AGUARDANDO_FOTOS")
         await query.edit_message_text(
-            '✅ Tipo selecionado!\n\n'
-            '📸 Agora envie as *3 fotos* da instalação.\n'
+            '✅ *Tipo Selecionado!*\n\n'
+            '� [Etapa 5/5]\n'
+            'Agora envie as *3 fotos* da instalação.\n'
+            '💡 Tire fotos claras do equipamento e instalação\n\n'
             'Quando terminar, digite /finalizar',
             parse_mode='Markdown'
         )
         return AGUARDANDO_FOTOS
-
-async def receber_serial(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    serial = update.message.text.strip()
-    context.user_data['serial_modem'] = serial
-    print(f"DEBUG: Serial recebido: {serial}")
-    print(f"DEBUG: Context user_data: {context.user_data}")
-    
-    await update.message.reply_text(
-        '✅ Serial registrado!\n\n'
-        '📸 Agora envie as *3 fotos* da instalação.\n'
-        'Quando terminar, digite /finalizar',
-        parse_mode='Markdown'
-    )
-    print("DEBUG: Mensagem enviada, retornando AGUARDANDO_FOTOS")
     return AGUARDANDO_FOTOS
 
 # Finalizar registro
@@ -1341,6 +1412,7 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'tecnico_nome': tecnico_nome,
         'tecnico_regiao': tecnico_regiao,
         'serial_modem': context.user_data.get('serial_modem'),
+        'serial_mesh': context.user_data.get('serial_mesh'),
         'data': datetime.now(TZ).strftime('%d/%m/%Y %H:%M')
     }
     nova_instalacao = {k: v for k, v in nova_instalacao.items() if v is not None}
@@ -1357,22 +1429,30 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return text
     
     if ok:
+        titulo = '✅ *REPARO REGISTRADO*' if nova_instalacao['categoria'] == 'reparo' else '✅ *INSTALAÇÃO REGISTRADA*'
         msg_parts = [
-            '✅ *Instalação registrada com sucesso\\!*\n\n',
-            f'📋 SA: `{nova_instalacao["sa"]}`\n',
-            f'🔌 GPON: `{nova_instalacao["gpon"]}`\n'
+            '━━━━━━━━━━━━━━━━━━━━\n',
+            f'{titulo}\n',
+            '━━━━━━━━━━━━━━━━━━━━\n\n',
+            '📋 *Detalhes:*\n',
+            f'• SA: `{nova_instalacao["sa"]}`\n',
+            f'• GPON: `{nova_instalacao["gpon"]}`\n'
         ]
     
         if nova_instalacao.get("serial_modem"):
-            msg_parts.append(f'📟 Serial: `{nova_instalacao["serial_modem"]}`\n')
+            msg_parts.append(f'• Serial Modem: `{nova_instalacao["serial_modem"]}`\n')
+            
+        if nova_instalacao.get("serial_mesh"):
+            msg_parts.append(f'• Serial Mesh: `{nova_instalacao["serial_mesh"]}`\n')
     
         msg_parts.extend([
-            f'🧩 Tipo: {escape_markdown(nova_instalacao["tipo"])}\n',
-            f'🗂️ Categoria: {escape_markdown(nova_instalacao["categoria"])}\n',
-            f'📸 Fotos: {len(nova_instalacao["fotos"])}\n',
-            f'👤 Técnico: {escape_markdown(nova_instalacao["tecnico_nome"])}\n',
-            f'📍 Região: {escape_markdown(nova_instalacao["tecnico_regiao"])}\n',
-            f'📅 Data: {escape_markdown(nova_instalacao["data"])}\n\n',
+            f'• Tipo: {escape_markdown(nova_instalacao["tipo"])}\n',
+            f'• Categoria: {escape_markdown(nova_instalacao["categoria"])}\n',
+            f'• Fotos: {len(nova_instalacao["fotos"])}\n\n',
+            f'👤 *Técnico:* {escape_markdown(nova_instalacao["tecnico_nome"])}\n',
+            f'📍 *Região:* {escape_markdown(nova_instalacao["tecnico_regiao"])}\n',
+            f'📅 *Data:* {escape_markdown(nova_instalacao["data"])}\n\n',
+            '🎉 Ótimo trabalho\\!\n\n',
             'Use /start para nova ação\\.'
         ])
         await update.message.reply_text(''.join(msg_parts), parse_mode='MarkdownV2')
@@ -1649,6 +1729,7 @@ def main():
             AGUARDANDO_GPON: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_gpon)],
             AGUARDANDO_TIPO: [CallbackQueryHandler(receber_tipo)],
             AGUARDANDO_SERIAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_serial)],
+            AGUARDANDO_SERIAL_MESH: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_serial_mesh)],
             AGUARDANDO_FOTOS: [
                 MessageHandler(filters.PHOTO, receber_foto),
                 CommandHandler('finalizar', finalizar)
