@@ -108,7 +108,7 @@ def main():
             AGUARDANDO_CONFIRMACAO_BROADCAST: [CallbackQueryHandler(confirmar_broadcast)]
         },
         fallbacks=[CommandHandler('cancelar', cancelar)],
-        per_message=True
+        per_message=False
     )
 
     # Adicionar handlers
