@@ -1,5 +1,12 @@
 from datetime import datetime
-from config import TZ, PONTOS_SERVICO, TABELA_FAIXAS
+from config import TZ, PONTOS_SERVICO, TABELA_FAIXAS, USE_GROQ, GROQ_API_KEY, GROQ_MODEL
+import base64
+import json
+import re
+try:
+    from groq import Groq
+except Exception:
+    Groq = None
 
 def formata_brl(v: float) -> str:
     """Formata um valor float para string de moeda BRL."""
@@ -59,3 +66,52 @@ def escape_markdown(text):
     for char in special_chars:
         text = text.replace(char, f'\\{char}')
     return text
+
+async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
+    if not USE_GROQ or not GROQ_API_KEY or Groq is None:
+        return {}
+    b64 = base64.b64encode(image_bytes).decode("ascii")
+    client = Groq(api_key=GROQ_API_KEY)
+    system = (
+        "Você extrai dados de prints técnicos. Retorne somente JSON válido com as chaves: "
+        "sa, gpon, serial_do_modem, mesh. Use maiúsculas. Para mesh retorne lista. "
+        "Se não houver valor, use null (ou [] para mesh)."
+    )
+    user_text = (
+        "Extraia SA, Acesso GPON, Número de série da ONT (modem) e seriais de equipamentos mesh. "
+        "Retorne exatamente no esquema solicitado."
+    )
+    content = [
+        {"type": "text", "text": user_text},
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+    ]
+    try:
+        resp = client.chat.completions.create(
+            model=GROQ_MODEL,
+            temperature=0,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": content},
+            ],
+        )
+        txt = resp.choices[0].message.content if resp and resp.choices else "{}"
+        data = json.loads(txt)
+    except Exception:
+        return {}
+    sa = str(data.get("sa") or "").strip().upper() or None
+    gpon = str(data.get("gpon") or "").strip().upper() or None
+    serial = str(data.get("serial_do_modem") or "").strip().upper() or None
+    mesh_raw = data.get("mesh") or []
+    if isinstance(mesh_raw, str):
+        mesh_list = [mesh_raw]
+    else:
+        mesh_list = list(mesh_raw)
+    mesh = [str(m).strip().upper() for m in mesh_list if m]
+    if sa and re.fullmatch(r"\d{5,}", sa):
+        sa = f"SA-{sa}"
+    return {
+        "sa": sa,
+        "gpon": gpon,
+        "serial_do_modem": serial,
+        "mesh": mesh,
+    }

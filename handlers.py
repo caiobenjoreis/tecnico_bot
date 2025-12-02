@@ -4,7 +4,9 @@ from config import *
 from database import db
 from datetime import datetime
 from reports import gerar_texto_producao, gerar_ranking_texto
-from utils import ciclo_atual
+from utils import ciclo_atual, escape_markdown, extrair_campos_por_imagem
+import io
+import os
 import logging
 
 logger = logging.getLogger(__name__)
@@ -303,6 +305,70 @@ async def receber_sa(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f'_(Digite /cancelar para voltar)_',
         parse_mode='Markdown'
     )
+    return AGUARDANDO_GPON
+
+async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    photo = update.message.photo[-1]
+    try:
+        file = await photo.get_file()
+    except Exception:
+        await update.message.reply_text('❌ Não consegui acessar a imagem. Envie novamente ou digite a SA.')
+        return AGUARDANDO_SA
+    image_bytes = None
+    try:
+        mem = await file.download_to_memory()
+        image_bytes = mem.getvalue()
+    except Exception:
+        try:
+            tmp = f"tmp_{photo.file_unique_id}.jpg"
+            await file.download_to_drive(tmp)
+            with open(tmp, 'rb') as f:
+                image_bytes = f.read()
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+        except Exception:
+            pass
+    if not image_bytes:
+        await update.message.reply_text('❌ Não consegui ler a imagem. Envie novamente ou digite a SA.')
+        return AGUARDANDO_SA
+    data = await extrair_campos_por_imagem(image_bytes)
+    sa = data.get('sa')
+    gpon = data.get('gpon')
+    serial_modem = data.get('serial_do_modem')
+    mesh_list = data.get('mesh') or []
+    if sa:
+        context.user_data['sa'] = sa
+    if gpon:
+        context.user_data['gpon'] = gpon
+    if serial_modem:
+        context.user_data['serial_modem'] = serial_modem
+    if mesh_list:
+        context.user_data['serial_mesh'] = mesh_list[0]
+    msg = (
+        '🧠 *Autopreenchimento por Foto*\n\n'
+        f"SA: `{escape_markdown(sa)}`\n"
+        f"GPON: `{escape_markdown(gpon)}`\n"
+        f"Serial Modem: `{escape_markdown(serial_modem)}`\n"
+        f"Mesh: `{escape_markdown(mesh_list[0] if mesh_list else 'não informado')}`\n\n"
+    )
+    if sa and gpon:
+        keyboard = [
+            [InlineKeyboardButton('Instalação', callback_data='instalacao')],
+            [InlineKeyboardButton('Instalação TV', callback_data='instalacao_tv')],
+            [InlineKeyboardButton('Instalação + Mesh', callback_data='instalacao_mesh')],
+            [InlineKeyboardButton('Mudança de Endereço', callback_data='mudanca_endereco')],
+            [InlineKeyboardButton('Serviços', callback_data='servicos')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        msg += 'Selecione o *tipo de serviço*:'
+        await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+        return AGUARDANDO_TIPO
+    if not sa:
+        await update.message.reply_text('Envie o *número da SA*:', parse_mode='Markdown')
+        return AGUARDANDO_SA
+    await update.message.reply_text('Agora digite o *GPON*:', parse_mode='Markdown')
     return AGUARDANDO_GPON
 
 async def receber_gpon(update: Update, context: ContextTypes.DEFAULT_TYPE):
