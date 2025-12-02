@@ -316,20 +316,26 @@ async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_T
         return AGUARDANDO_SA
     image_bytes = None
     try:
-        mem = await file.download_to_memory()
-        image_bytes = mem.getvalue()
+        out = io.BytesIO()
+        await file.download_to_memory(out)
+        image_bytes = out.getvalue()
     except Exception:
         try:
-            tmp = f"tmp_{photo.file_unique_id}.jpg"
-            await file.download_to_drive(tmp)
-            with open(tmp, 'rb') as f:
-                image_bytes = f.read()
+            if hasattr(file, 'download_as_bytearray'):
+                ba = await file.download_as_bytearray()
+                image_bytes = bytes(ba)
+        except Exception:
             try:
-                os.remove(tmp)
+                tmp = f"tmp_{photo.file_unique_id}.jpg"
+                await file.download_to_drive(tmp)
+                with open(tmp, 'rb') as f:
+                    image_bytes = f.read()
+                try:
+                    os.remove(tmp)
+                except Exception:
+                    pass
             except Exception:
                 pass
-        except Exception:
-            pass
     if not image_bytes:
         await update.message.reply_text('❌ Não consegui processar a imagem. Envie novamente (print recortado) ou digite a SA.')
         return AGUARDANDO_SA
@@ -492,13 +498,13 @@ async def receber_serial_por_foto(update: Update, context: ContextTypes.DEFAULT_
     image_bytes = None
     try:
         file = await photo.get_file()
-        mem = await file.download_to_memory()
-        try:
-            image_bytes = mem.getvalue() if hasattr(mem, 'getvalue') else (mem if isinstance(mem, (bytes, bytearray)) else None)
-        except Exception:
-            image_bytes = None
+        out = io.BytesIO()
+        await file.download_to_memory(out)
+        image_bytes = out.getvalue()
+        if not image_bytes and hasattr(file, 'download_as_bytearray'):
+            ba = await file.download_as_bytearray()
+            image_bytes = bytes(ba)
         if not image_bytes:
-            # Fallback: salvar em disco temporário
             tmp = f"tmp_{photo.file_unique_id}.jpg"
             await file.download_to_drive(tmp)
             with open(tmp, 'rb') as f:
@@ -552,11 +558,12 @@ async def receber_serial_mesh_por_foto(update: Update, context: ContextTypes.DEF
     image_bytes = None
     try:
         file = await photo.get_file()
-        mem = await file.download_to_memory()
-        try:
-            image_bytes = mem.getvalue() if hasattr(mem, 'getvalue') else (mem if isinstance(mem, (bytes, bytearray)) else None)
-        except Exception:
-            image_bytes = None
+        out = io.BytesIO()
+        await file.download_to_memory(out)
+        image_bytes = out.getvalue()
+        if not image_bytes and hasattr(file, 'download_as_bytearray'):
+            ba = await file.download_as_bytearray()
+            image_bytes = bytes(ba)
         if not image_bytes:
             tmp = f"tmp_{photo.file_unique_id}.jpg"
             await file.download_to_drive(tmp)
