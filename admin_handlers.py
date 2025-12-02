@@ -5,6 +5,7 @@ from database import db
 from datetime import datetime
 import io
 import csv
+from collections import defaultdict
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
@@ -42,24 +43,101 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     
     if query.data == 'admin_stats':
-        # Estatísticas simplificadas para não travar
         users = await db.get_all_users()
-        # Para total de instalações, ideal seria count(), mas get_installations traz lista
-        # Vamos limitar a query para não explodir
-        insts = await db.get_installations(limit=1000) 
+        insts = await db.get_installations(limit=10000)
+        
+        agora = datetime.now(TZ)
+        mes_atual = agora.month
+        ano_atual = agora.year
+        
+        if mes_atual == 1:
+            mes_anterior = 12
+            ano_anterior = ano_atual - 1
+        else:
+            mes_anterior = mes_atual - 1
+            ano_anterior = ano_atual
+            
+        inst_mes_atual = 0
+        inst_mes_anterior = 0
+        por_regiao = defaultdict(int)
+        
+        for inst in insts:
+            try:
+                data_inst = datetime.strptime(inst['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
+                
+                if data_inst.month == mes_atual and data_inst.year == ano_atual:
+                    inst_mes_atual += 1
+                elif data_inst.month == mes_anterior and data_inst.year == ano_anterior:
+                    inst_mes_anterior += 1
+                
+                regiao = inst.get('tecnico_regiao') or 'Não informada'
+                por_regiao[regiao] += 1
+            except:
+                continue
+        
+        crescimento = 0
+        if inst_mes_anterior > 0:
+            crescimento = ((inst_mes_atual - inst_mes_anterior) / inst_mes_anterior) * 100
+            
+        sinal = "+" if crescimento >= 0 else ""
+        
+        top_regioes = sorted(por_regiao.items(), key=lambda x: x[1], reverse=True)[:3]
         
         msg = (
-            f'📊 *Estatísticas*\n\n'
-            f'👥 Técnicos: {len(users)}\n'
-            f'📦 Instalações (Amostra): {len(insts)}\n'
+            '━━━━━━━━━━━━━━━━━━━━\n'
+            '📊 *ESTATÍSTICAS AVANÇADAS*\n'
+            '━━━━━━━━━━━━━━━━━━━━\n\n'
+            f'👥 *Técnicos:* {len(users)}\n'
+            f'📦 *Total Geral:* {len(insts)}\n\n'
+            '📅 *Comparativo Mensal*\n'
+            f'• Este Mês: *{inst_mes_atual}*\n'
+            f'• Mês Passado: *{inst_mes_anterior}*\n'
+            f'📈 Crescimento: *{sinal}{crescimento:.1f}%*\n\n'
+            '🏆 *Top Regiões*\n'
         )
+        
+        for idx, (regiao, qtd) in enumerate(top_regioes, 1):
+            barra = "█" * min(int(qtd/5) + 1, 10)
+            msg += f'{idx}. {regiao}: *{qtd}* ({barra})\n'
+            
         await query.edit_message_text(msg, parse_mode='Markdown')
         
     elif query.data == 'admin_users':
         users = await db.get_all_users()
-        msg = f'👥 *Técnicos ({len(users)})*\n\n'
-        for uid, u in list(users.items())[:20]:
-            msg += f'👤 {u.get("nome")} {u.get("sobrenome")} | {u.get("regiao")}\n'
+        insts = await db.get_installations(limit=10000)
+        
+        instalacoes_por_tecnico = defaultdict(int)
+        for inst in insts:
+            tid = str(inst.get('tecnico_id', ''))
+            if tid:
+                instalacoes_por_tecnico[tid] += 1
+                
+        def escape_md(text):
+            return str(text).replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
+            
+        msg = (
+            '━━━━━━━━━━━━━━━━━━━━\n'
+            f'👥 *TÉCNICOS ({len(users)})*\n'
+            '━━━━━━━━━━━━━━━━━━━━\n\n'
+        )
+        
+        lista_ordenada = sorted(users.items(), key=lambda x: instalacoes_por_tecnico.get(x[0], 0), reverse=True)
+        
+        for user_id, dados_user in lista_ordenada[:20]:
+            nome = f"{dados_user.get('nome', '')} {dados_user.get('sobrenome', '')}".strip()
+            regiao = dados_user.get('regiao', 'N/A')
+            qtd = instalacoes_por_tecnico.get(user_id, 0)
+            
+            is_adm = '👑 ' if int(user_id) in ADMIN_IDS else ''
+            
+            msg += f'{is_adm}*{escape_md(nome)}*\n'
+            msg += f'🆔 `{user_id}` | 📍 {escape_md(regiao)}\n'
+            msg += f'📦 {qtd} instalações\n'
+            msg += '───────────────\n'
+            
+        if len(lista_ordenada) > 20:
+            msg += f'\n_E mais {len(lista_ordenada) - 20} técnicos..._'
+            
         await query.edit_message_text(msg, parse_mode='Markdown')
         
     elif query.data == 'admin_all_installs':
@@ -272,4 +350,3 @@ async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.edit_message_text(relatorio, parse_mode='Markdown')
     context.user_data.pop('broadcast_data', None)
     return ConversationHandler.END
-

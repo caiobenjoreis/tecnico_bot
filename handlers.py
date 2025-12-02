@@ -1,147 +1,12 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
-from datetime import datetime
 from config import *
 from database import db
-from utils import ciclo_atual, escape_markdown
+from datetime import datetime
 from reports import gerar_texto_producao, gerar_ranking_texto
 import logging
 
 logger = logging.getLogger(__name__)
-
-# ==================== FUNÇÕES AUXILIARES DE MENU ====================
-
-async def exibir_menu_principal(update: Update, context: ContextTypes.DEFAULT_TYPE, username: str):
-    keyboard = [
-        [InlineKeyboardButton("🆕 Registrar Instalação", callback_data='registrar')],
-        [InlineKeyboardButton("🛠️ Registrar Reparo", callback_data='registrar_reparo')],
-        [InlineKeyboardButton("🔎 Consultar SA/GPON", callback_data='consultar')],
-        [InlineKeyboardButton("📂 Minhas Instalações", callback_data='minhas')],
-        [InlineKeyboardButton("📅 Consulta Produção", callback_data='consulta_producao')],
-        [InlineKeyboardButton("📊 Relatórios", callback_data='relatorios')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    msg = (
-        '━━━━━━━━━━━━━━━━━━━━\n'
-        '🛠️ *TÉCNICO BOT*\n'
-        '━━━━━━━━━━━━━━━━━━━━\n\n'
-        f'👋 Olá, *{username}*!\n'
-        f'📅 {datetime.now(TZ).strftime("%d/%m/%Y")}\n\n'
-        'Escolha uma opção abaixo:'
-    )
-    
-    if update.callback_query:
-        await update.callback_query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
-    else:
-        await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
-
-# ==================== HANDLERS DE COMANDO ====================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    username = update.message.from_user.username or update.message.from_user.first_name
-    
-    # Verificar se usuário existe
-    user_data = await db.get_user(str(user_id))
-    
-    if not user_data:
-        context.user_data['ident'] = {}
-        await update.message.reply_text(
-            '👋 *Bem-vindo ao TÉCNICO BOT!*\n\n'
-            'Para começar, vamos configurar seu perfil.\n\n'
-            '📝 Por favor, informe seu *primeiro nome*:\n'
-            '_(Digite /cancelar a qualquer momento para sair)_',
-            parse_mode='Markdown'
-        )
-        return AGUARDANDO_NOME
-    
-    await exibir_menu_principal(update, context, username)
-    return ConversationHandler.END
-
-async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('❌ Operação cancelada. Use /start para começar novamente.')
-    context.user_data.clear()
-    return ConversationHandler.END
-
-async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = (
-        '🆘 *Central de Ajuda*\n\n'
-        'Aqui estão os comandos disponíveis:\n\n'
-        '🔹 /start - Iniciar o bot e ver o menu principal\n'
-        '🔹 /ajuda - Ver esta mensagem de ajuda\n'
-        '🔹 /cancelar - Cancelar a operação atual\n'
-        '🔹 /meuid - Descobrir seu ID do Telegram\n'
-        '🔹 /mensal - Relatório de produção mensal\n'
-        '🔹 /semanal - Relatório de produção semanal\n'
-        '🔹 /hoje - Relatório de produção de hoje\n'
-        '🔹 /consultar - Consultar uma instalação por SA ou GPON\n'
-        '🔹 /reparo - Iniciar registro de reparo rápido\n'
-        '🔹 /producao - Consultar produção por período\n\n'
-        '💡 *Dica:* Se ficar preso em alguma etapa, digite /cancelar para voltar ao início.'
-    )
-    await update.message.reply_text(msg, parse_mode='Markdown')
-
-async def meu_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    username = update.message.from_user.username or "Não definido"
-    first_name = update.message.from_user.first_name
-    
-    msg = (
-        f'🆔 *Suas Informações*\n\n'
-        f'👤 Nome: {first_name}\n'
-        f'🔖 Username: @{username}\n'
-        f'🔢 **ID do Telegram:** `{user_id}`\n\n'
-        f'💡 *Para se tornar admin:*\n'
-        f'Envie este ID para o administrador do sistema.'
-    )
-    await update.message.reply_text(msg, parse_mode='Markdown')
-
-# ==================== FLUXO DE REGISTRO (CADASTRO INICIAL) ====================
-
-async def receber_nome(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.setdefault('ident', {})
-    context.user_data['ident']['nome'] = update.message.text.strip()
-    await update.message.reply_text(
-        '📝 Ótimo! Agora informe seu *sobrenome*:\n'
-        '_(Ou /cancelar para sair)_',
-        parse_mode='Markdown'
-    )
-    return AGUARDANDO_SOBRENOME
-
-async def receber_sobrenome(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.setdefault('ident', {})
-    context.user_data['ident']['sobrenome'] = update.message.text.strip()
-    await update.message.reply_text(
-        '📍 Para finalizar, informe sua *região de atuação*:\n'
-        '_(Ou /cancelar para sair)_',
-        parse_mode='Markdown'
-    )
-    return AGUARDANDO_REGIAO
-
-async def receber_regiao(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    regiao = update.message.text.strip()
-    user_id = update.message.from_user.id
-    ident = context.user_data.get('ident', {})
-    
-    dados_usuario = {
-        'id': str(user_id),
-        'nome': ident.get('nome', ''),
-        'sobrenome': ident.get('sobrenome', ''),
-        'regiao': regiao,
-        'telegram': update.message.from_user.username or update.message.from_user.first_name
-    }
-    
-    ok = await db.save_user(dados_usuario)
-    
-    if ok:
-        await update.message.reply_text('✅ Perfil salvo com sucesso!', parse_mode='Markdown')
-        await exibir_menu_principal(update, context, dados_usuario['telegram'])
-    else:
-        await update.message.reply_text('❌ Erro ao salvar perfil. Tente novamente mais tarde.')
-        
-    context.user_data.pop('ident', None)
-    return ConversationHandler.END
 
 # ==================== FLUXO DE INSTALAÇÃO/REPARO ====================
 
@@ -212,7 +77,51 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return None
             
         msg = gerar_texto_producao(insts, inicio_dt, fim_dt, username)
+        
+        # Adicionar botão "Ver Detalhes"
+        keyboard = [[InlineKeyboardButton("📄 Ver Detalhes", callback_data='detalhes_producao')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
+        return None
+    
+    elif query.data == 'detalhes_producao':
+        user_id = query.from_user.id
+        inicio_dt, fim_dt = ciclo_atual()
+        
+        insts = await db.get_installations({'tecnico_id': user_id, 'data_inicio': inicio_dt, 'data_fim': fim_dt})
+        
+        if not insts:
+            await query.answer("Nenhuma instalação encontrada.", show_alert=True)
+            return None
+        
+        # Gerar lista detalhada
+        msg = f"📄 *Detalhes do Ciclo ({inicio_dt.strftime('%d/%m')} - {fim_dt.strftime('%d/%m')})*\n\n"
+        
+        # Ordenar por data (mais recente primeiro)
+        insts_sorted = sorted(insts, key=lambda x: datetime.strptime(x['data'], '%d/%m/%Y %H:%M'), reverse=True)
+        
+        for inst in insts_sorted:
+            tipo = inst.get('tipo', 'Instalação')
+            from config import PONTOS_SERVICO
+            pontos = PONTOS_SERVICO.get(tipo.lower(), 0)
+            msg += f"📅 {inst['data']} | {pontos} pts\n"
+            msg += f"🔧 {tipo} | SA: {inst['sa']}\n"
+            msg += f"──────────────────\n"
+        
+        # Truncar se muito longo
+        if len(msg) > 4000:
+            msg = msg[:4000] + "\n\n(Lista truncada devido ao tamanho...)"
+        
         await query.edit_message_text(msg, parse_mode='Markdown')
+        return None
+    
+    elif query.data == 'voltar':
+        # Importar aqui para evitar ciclo se start estiver em outro lugar, mas start está em handlers?
+        # Não, start está em handlers.py. Precisamos definir exibir_menu_principal ou importar start.
+        # O original chamava start(update, context).
+        # Vamos chamar start diretamente se estiver neste arquivo.
+        await start(update, context)
         return None
 
     elif query.data == 'relatorios':
@@ -263,19 +172,123 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(msg, parse_mode='Markdown')
         return None
         
-    elif query.data == 'voltar':
-        username = query.from_user.username or query.from_user.first_name
-        await exibir_menu_principal(update, context, username)
-        return None
+    # Callbacks do painel admin
+    elif query.data.startswith('admin_'):
+        from admin_handlers import admin_callback_handler
+        return await admin_callback_handler(update, context)
+        
+    elif query.data.startswith('broadcast_'):
+        from admin_handlers import confirmar_broadcast
+        # Este handler é chamado via CallbackQueryHandler específico no main, mas se cair aqui...
+        pass
 
     return None
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.message.from_user
+    user_id = user.id
+    username = user.username or user.first_name
+    
+    # Verificar se usuário existe
+    db_user = await db.get_user(str(user_id))
+    
+    if not db_user:
+        await update.message.reply_text(
+            f'👋 Olá, {username}!\n\n'
+            'Bem-vindo ao *Bot Técnico*.\n'
+            'Para começar, preciso de alguns dados.\n\n'
+            'Digite seu *Nome*:',
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_NOME
+    
+    await exibir_menu_principal(update, context, username)
+    return ConversationHandler.END
+
+async def exibir_menu_principal(update: Update, context: ContextTypes.DEFAULT_TYPE, username: str):
+    keyboard = [
+        [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
+        [InlineKeyboardButton("🛠️ Registrar Reparo", callback_data='registrar_reparo')],
+        [InlineKeyboardButton("🔎 Consultar", callback_data='consultar')],
+        [InlineKeyboardButton("📂 Minhas Instalações", callback_data='minhas')],
+        [InlineKeyboardButton("📊 Minha Produção", callback_data='consulta_producao')],
+        [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    msg = (
+        f'🔧 *Painel do Técnico*\n'
+        f'👤 Usuário: {username}\n\n'
+        'Selecione uma opção:'
+    )
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def receber_nome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    nome = update.message.text.strip()
+    context.user_data['nome'] = nome
+    await update.message.reply_text('Ok! Agora digite seu *Sobrenome*:', parse_mode='Markdown')
+    return AGUARDANDO_SOBRENOME
+
+async def receber_sobrenome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    sobrenome = update.message.text.strip()
+    context.user_data['sobrenome'] = sobrenome
+    await update.message.reply_text('Certo. Qual sua *Região*? (Ex: Centro, Norte, etc):', parse_mode='Markdown')
+    return AGUARDANDO_REGIAO
+
+async def receber_regiao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    regiao = update.message.text.strip()
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username or update.message.from_user.first_name
+    
+    novo_usuario = {
+        'id': str(user_id),
+        'nome': context.user_data['nome'],
+        'sobrenome': context.user_data['sobrenome'],
+        'regiao': regiao,
+        'username': username
+    }
+    
+    await db.save_user(novo_usuario)
+    await update.message.reply_text('✅ Cadastro realizado com sucesso!')
+    await exibir_menu_principal(update, context, username)
+    return ConversationHandler.END
+
+async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = (
+        '🆘 *Ajuda*\n\n'
+        '/start - Menu Principal\n'
+        '/producao - Ver produção atual\n'
+        '/consultar - Consultar instalação\n'
+        '/reparo - Registrar reparo\n'
+        '/cancelar - Cancelar operação\n'
+        '/admin - Painel Administrativo (apenas admins)'
+    )
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def meu_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    await update.message.reply_text(f'🆔 Seu ID: `{user_id}`', parse_mode='Markdown')
+
+async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.message.reply_text('❌ Operação cancelada. Use /start para voltar ao menu.')
+    return ConversationHandler.END
 
 async def receber_sa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sa = update.message.text.strip()
     context.user_data['sa'] = sa
     await update.message.reply_text(
-        f'✅ *SA Registrada!*\n📋 SA: `{sa}`\n\n'
-        f'📝 [Etapa 2/5]\nAgora digite o *GPON*:\n💡 Exemplo: ABCD1234',
+        f'✅ *SA Registrada com Sucesso!*\n'
+        f'📋 SA: `{sa}`\n\n'
+        f'📝 *[Etapa 2/5]*\n'
+        f'Agora digite o *GPON*:\n'
+        f'💡 Exemplo: ABCD1234\n\n'
+        f'_(Digite /cancelar para voltar)_',
         parse_mode='Markdown'
     )
     return AGUARDANDO_GPON
@@ -296,7 +309,12 @@ async def receber_gpon(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton('Retirada', callback_data='retirada')],
             [InlineKeyboardButton('Serviços', callback_data='servicos')]
         ]
-        prompt = '✅ *GPON Registrado!*\n📝 [Etapa 3/5]\nSelecione o *tipo de reparo*:'
+        prompt = (
+            '✅ *GPON Registrado!*\n'
+            f'🔌 GPON: `{gpon}`\n\n'
+            '📝 *[Etapa 3/5]*\n'
+            'Selecione o *tipo de reparo*:'
+        )
     else:
         keyboard = [
             [InlineKeyboardButton('Instalação', callback_data='instalacao')],
@@ -305,7 +323,12 @@ async def receber_gpon(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton('Mudança de Endereço', callback_data='mudanca_endereco')],
             [InlineKeyboardButton('Serviços', callback_data='servicos')]
         ]
-        prompt = '✅ *GPON Registrado!*\n📝 [Etapa 3/5]\nSelecione o *tipo de serviço*:'
+        prompt = (
+            '✅ *GPON Registrado!*\n'
+            f'🔌 GPON: `{gpon}`\n\n'
+            '📝 *[Etapa 3/5]*\n'
+            'Selecione o *tipo de serviço*:'
+        )
         
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(prompt, reply_markup=reply_markup, parse_mode='Markdown')
@@ -321,13 +344,21 @@ async def receber_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if tipo in tipos_com_serial:
         await query.edit_message_text(
-            '✅ *Tipo Selecionado!*\n📝 [Etapa 4/5]\nAgora envie o *Número de Série do Modem*:\n💡 Exemplo: ZTEGC8...',
+            '✅ *Tipo Selecionado!*\n'
+            '📝 *[Etapa 4/5]*\n'
+            'Agora envie o *Número de Série do Modem*:\n'
+            '💡 Exemplo: ZTEGC8...\n\n'
+            '_(Ou digite /cancelar para sair)_',
             parse_mode='Markdown'
         )
         return AGUARDANDO_SERIAL
     else:
         await query.edit_message_text(
-            '✅ *Tipo Selecionado!*\n📝 [Etapa 5/5]\nAgora envie as *3 fotos* da instalação.\n💡 Tire fotos claras.\nQuando terminar, digite /finalizar',
+            '✅ *Tipo Selecionado!*\n'
+            '📝 *[Etapa 5/5]*\n'
+            'Agora envie as *3 fotos* da instalação.\n'
+            '💡 Tire fotos claras.\n'
+            'Quando terminar, digite /finalizar',
             parse_mode='Markdown'
         )
         return AGUARDANDO_FOTOS
@@ -338,13 +369,19 @@ async def receber_serial(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if context.user_data.get('tipo') == 'instalacao_mesh':
         await update.message.reply_text(
-            '✅ *Serial Modem Registrado!*\n📝 [Etapa 5/6]\nAgora envie o *Serial do Roteador Mesh*:',
+            '✅ *Serial Modem Registrado!*\n'
+            '📝 *[Etapa 5/6]*\n'
+            'Agora envie o *Serial do Roteador Mesh*:\n'
+            '_(Ou digite /cancelar para sair)_',
             parse_mode='Markdown'
         )
         return AGUARDANDO_SERIAL_MESH
     
     await update.message.reply_text(
-        '✅ *Serial Registrado!*\n📝 [Etapa 5/5]\nAgora envie as *3 fotos* da instalação.\nQuando terminar, digite /finalizar',
+        '✅ *Serial Registrado!*\n'
+        '📝 *[Etapa 5/5]*\n'
+        'Agora envie as *3 fotos* da instalação.\n'
+        'Quando terminar, digite /finalizar',
         parse_mode='Markdown'
     )
     return AGUARDANDO_FOTOS
@@ -353,7 +390,10 @@ async def receber_serial_mesh(update: Update, context: ContextTypes.DEFAULT_TYPE
     serial_mesh = update.message.text.strip()
     context.user_data['serial_mesh'] = serial_mesh
     await update.message.reply_text(
-        '✅ *Serial Mesh Registrado!*\n📝 [Etapa 6/6]\nAgora envie as *3 fotos* da instalação.\nQuando terminar, digite /finalizar',
+        '✅ *Serial Mesh Registrado!*\n'
+        '📝 *[Etapa 6/6]*\n'
+        'Agora envie as *3 fotos* da instalação.\n'
+        'Quando terminar, digite /finalizar',
         parse_mode='Markdown'
     )
     return AGUARDANDO_FOTOS
@@ -369,12 +409,16 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if num_fotos < 3:
         await update.message.reply_text(
-            f'✅ *Foto {num_fotos}/3 Recebida!*\nEnvie mais {3 - num_fotos} foto(s).',
+            f'✅ *Foto {num_fotos}/3 Recebida!*\n'
+            f'{"🟢" * num_fotos}{"⚪" * (3-num_fotos)}\n\n'
+            f'Envie mais {3 - num_fotos} foto(s).',
             parse_mode='Markdown'
         )
     else:
         await update.message.reply_text(
-            f'✅ *{num_fotos} fotos recebidas!*\nDigite /finalizar para salvar.',
+            f'✅ *{num_fotos} fotos recebidas!*\n'
+            f'{"🟢" * 3}\n\n'
+            'Digite /finalizar para salvar.',
             parse_mode='Markdown'
         )
     return AGUARDANDO_FOTOS
@@ -387,8 +431,8 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     user_data = await db.get_user(str(user_id))
     
-    tecnico_nome = user_data.get('nome', '') + ' ' + user_data.get('sobrenome', '') if user_data else "Desconhecido"
-    tecnico_regiao = user_data.get('regiao') if user_data else None
+    tecnico_nome = (f"{user_data.get('nome','')} {user_data.get('sobrenome','')}".strip() if user_data else (update.message.from_user.username or update.message.from_user.first_name))
+    tecnico_regiao = (user_data.get('regiao') if user_data else None)
     
     nova_instalacao = {
         'sa': context.user_data['sa'],
@@ -397,7 +441,7 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'categoria': context.user_data.get('modo_registro') or 'instalacao',
         'fotos': context.user_data.get('fotos', []),
         'tecnico_id': user_id,
-        'tecnico_nome': tecnico_nome.strip(),
+        'tecnico_nome': tecnico_nome,
         'tecnico_regiao': tecnico_regiao,
         'serial_modem': context.user_data.get('serial_modem'),
         'serial_mesh': context.user_data.get('serial_mesh'),
@@ -409,17 +453,43 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     ok = await db.save_installation(nova_instalacao)
     
+    def escape_markdown_v2(text):
+        if text is None:
+            return 'não informada'
+        special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+        for char in special_chars:
+            text = str(text).replace(char, f'\\{char}')
+        return text
+    
     if ok:
-        await update.message.reply_text(
-            f'✅ *Registro Salvo com Sucesso!*\n'
-            f'SA: `{nova_instalacao["sa"]}`\n'
-            f'Use /start para nova ação.',
-            parse_mode='Markdown'
-        )
-        context.user_data.clear()
-        return ConversationHandler.END
+        titulo = '✅ *REPARO REGISTRADO*' if nova_instalacao['categoria'] == 'reparo' else '✅ *INSTALAÇÃO REGISTRADA*'
+        msg_parts = [
+            '━━━━━━━━━━━━━━━━━━━━\n',
+            f'{titulo}\n',
+            '━━━━━━━━━━━━━━━━━━━━\n\n',
+            '📋 *Detalhes:*\n',
+            f'• SA: `{nova_instalacao["sa"]}`\n',
+            f'• GPON: `{nova_instalacao["gpon"]}`\n'
+        ]
+    
+        if nova_instalacao.get("serial_modem"):
+            msg_parts.append(f'• Serial Modem: `{nova_instalacao["serial_modem"]}`\n')
+            
+        if nova_instalacao.get("serial_mesh"):
+            msg_parts.append(f'• Serial Mesh: `{nova_instalacao["serial_mesh"]}`\n')
+    
+        msg_parts.extend([
+            f'• Tipo: {escape_markdown_v2(nova_instalacao["tipo"])}\n',
+            f'• Categoria: {escape_markdown_v2(nova_instalacao["categoria"])}\n',
+            f'• Fotos: {len(nova_instalacao["fotos"])}\n\n',
+            f'👤 *Técnico:* {escape_markdown_v2(nova_instalacao["tecnico_nome"])}\n',
+            f'📍 *Região:* {escape_markdown_v2(nova_instalacao["tecnico_regiao"])}\n',
+            f'📅 *Data:* {escape_markdown_v2(nova_instalacao["data"])}\n\n',
+            '🎉 Ótimo trabalho\\!\n\n',
+            'Use /start para nova ação\\.'
+        ])
+        await update.message.reply_text(''.join(msg_parts), parse_mode='MarkdownV2')
     else:
-        # Não limpar user_data em caso de erro
         keyboard = [[InlineKeyboardButton("🔄 Tentar Novamente", callback_data='retry_save')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
@@ -427,24 +497,68 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup
         )
         return AGUARDANDO_FOTOS # Mantém no estado para retry
+    
+    context.user_data.clear()
+    return ConversationHandler.END
 
 async def consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    termo = update.message.text.strip()
-    insts = await db.get_installations({'termo_busca': termo}, limit=5)
+    texto_busca = update.message.text.strip()
     
-    if not insts:
-        await update.message.reply_text(f'❌ Nada encontrado para: `{termo}`', parse_mode='Markdown')
-        return ConversationHandler.END
-        
-    for inst in insts:
-        msg = (
-            f'📋 *SA:* `{inst.get("sa")}`\n'
-            f'🔌 *GPON:* `{inst.get("gpon")}`\n'
-            f'🧩 *Tipo:* {escape_markdown(inst.get("tipo"))}\n'
-            f'📅 *Data:* {escape_markdown(inst.get("data"))}\n'
+    # Buscar TODAS as instalações (como no original)
+    insts = await db.get_installations(limit=5000)
+    
+    # Busca em memória (substring match)
+    termo = texto_busca.lower()
+    resultados = []
+    for d in insts:
+        sa = str(d.get('sa') or '').lower()
+        gpon = str(d.get('gpon') or '').lower()
+        if termo in sa or termo in gpon:
+            resultados.append(d)
+    
+    if not resultados:
+        await update.message.reply_text(
+            f'❌ Nenhuma instalação encontrada para: `{texto_busca}`',
+            parse_mode='Markdown'
         )
+        return ConversationHandler.END
+    
+    for resultado in resultados:
+        # Escapar caracteres especiais para MarkdownV2
+        def escape_md(text):
+            if text is None:
+                return 'N/A'
+            special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+            text = str(text)
+            for char in special_chars:
+                text = text.replace(char, f'\\{char}')
+            return text
+        
+        msg_parts = [
+            f'📋 *SA:* `{resultado["sa"]}`\n',
+            f'🔌 *GPON:* `{resultado["gpon"]}`\n'
+        ]
+        
+        if resultado.get("serial_modem"):
+            msg_parts.append(f'📟 *Serial:* `{resultado["serial_modem"]}`\n')
+        
+        msg_parts.extend([
+            f'🧩 *Tipo:* {escape_md(resultado.get("tipo", "instalacao"))}\n',
+            f'👤 *Técnico:* {escape_md(resultado["tecnico_nome"])}\n',
+            f'📅 *Data:* {escape_md(resultado["data"])}\n',
+            f'📸 *Fotos:* {len(resultado.get("fotos", []))}'
+        ])
+        
+        msg = ''.join(msg_parts)
         await update.message.reply_text(msg, parse_mode='MarkdownV2')
         
+        # Enviar as fotos (COMO NO ORIGINAL)
+        for foto_id in resultado.get('fotos', []):
+            try:
+                await update.message.reply_photo(photo=foto_id)
+            except:
+                pass
+                
     return ConversationHandler.END
 
 async def comando_consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -545,4 +659,3 @@ async def receber_data_fim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data.pop('data_inicio', None)
     return ConversationHandler.END
-

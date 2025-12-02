@@ -56,6 +56,7 @@ def main():
             BotCommand("semanal", "Relatório semanal"),
             BotCommand("hoje", "Relatório de hoje"),
             BotCommand("consultar", "Consultar instalação"),
+            BotCommand("reparo", "Registrar reparo"),
             BotCommand("admin", "Painel Admin")
         ])
         # Verificar banco de dados
@@ -118,6 +119,7 @@ def main():
     app.add_handler(CommandHandler('mensal', comando_mensal))
     app.add_handler(CommandHandler('semanal', comando_semanal))
     app.add_handler(CommandHandler('hoje', comando_hoje))
+    app.add_handler(CommandHandler('reparo', comando_reparo))
     
     # Handlers de Admin (Callbacks)
     app.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
