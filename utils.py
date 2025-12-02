@@ -92,6 +92,7 @@ async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
         "llama-3.2-90b-vision-preview",
     ]
     data = {}
+    txt_last = ""
     for m in models:
         try:
             resp = client.chat.completions.create(
@@ -105,17 +106,40 @@ async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
                 ],
             )
             txt = resp.choices[0].message.content if resp and resp.choices else "{}"
-            data = json.loads(txt)
+            txt_last = txt or ""
+            try:
+                data = json.loads(txt)
+            except Exception:
+                data = {}
             break
         except Exception as e:
             logging.error(f"Groq vision falhou com modelo {m}: {e}")
             continue
     if not data:
-        return {}
-    sa = str(data.get("sa") or "").strip().upper() or None
-    gpon = str(data.get("gpon") or "").strip().upper() or None
-    serial = str(data.get("serial_do_modem") or "").strip().upper() or None
-    mesh_raw = data.get("mesh") or []
+        # Fallback: tentar extrair via texto bruto
+        text = txt_last
+        sa_match = re.search(r"SA[-\s:]?\s*(\d{5,})", text, re.I)
+        gpon_match = re.search(r"Acesso\s*GPON\s*[:]?\s*([A-Z0-9]{6,16})", text, re.I)
+        serial_match = re.search(r"(Número\s*de\s*série|Serial)\s*[:]?\s*([A-Z0-9]{8,20})", text, re.I)
+        mesh_matches = re.findall(r"MESH[^\n]*?([A-Z0-9]{8,20})", text, re.I)
+        sa = (f"SA-{sa_match.group(1)}" if sa_match else None)
+        gpon = (gpon_match.group(1) if gpon_match else None)
+        serial = (serial_match.group(2) if serial_match else None)
+        mesh = [m.upper() for m in mesh_matches]
+        return {"sa": sa, "gpon": gpon, "serial_do_modem": (serial.upper() if serial else None), "mesh": mesh}
+    def pick(d, keys):
+        for k in keys:
+            v = d.get(k)
+            if v:
+                return v
+        return None
+    sa_val = pick(data, ["sa", "sa_number", "service_order", "ordem_de_servico"]) or ""
+    gpon_val = pick(data, ["gpon", "acesso_gpon", "id_gpon"]) or ""
+    serial_val = pick(data, ["serial_do_modem", "serial_modem", "numero_de_serie", "ont_serial"]) or ""
+    mesh_raw = pick(data, ["mesh", "mesh_list", "mesh_serials"]) or []
+    sa = str(sa_val).strip().upper() or None
+    gpon = str(gpon_val).strip().upper() or None
+    serial = str(serial_val).strip().upper() or None
     if isinstance(mesh_raw, str):
         mesh_list = [mesh_raw]
     else:
@@ -129,3 +153,20 @@ async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
         "serial_do_modem": serial,
         "mesh": mesh,
     }
+
+async def extrair_campos_por_imagens(images: list) -> dict:
+    agg = {"sa": None, "gpon": None, "serial_do_modem": None, "mesh": []}
+    for img in images:
+        try:
+            d = await extrair_campos_por_imagem(img)
+        except Exception:
+            d = {}
+        for k in ["sa", "gpon", "serial_do_modem"]:
+            v = d.get(k)
+            if v and not agg[k]:
+                agg[k] = v
+        ms = d.get("mesh") or []
+        for m in ms:
+            if m and m not in agg["mesh"]:
+                agg["mesh"].append(m)
+    return agg

@@ -4,7 +4,7 @@ from config import *
 from database import db
 from datetime import datetime
 from reports import gerar_texto_producao, gerar_ranking_texto
-from utils import ciclo_atual, escape_markdown, extrair_campos_por_imagem
+from utils import ciclo_atual, escape_markdown, extrair_campos_por_imagem, extrair_campos_por_imagens
 import io
 import os
 import logging
@@ -333,7 +333,10 @@ async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_T
     if not image_bytes:
         await update.message.reply_text('❌ Não consegui processar a imagem. Envie novamente (print recortado) ou digite a SA.')
         return AGUARDANDO_SA
-    data = await extrair_campos_por_imagem(image_bytes)
+    imgs = context.user_data.get('autofill_images') or []
+    imgs.append(image_bytes)
+    context.user_data['autofill_images'] = imgs
+    data = await extrair_campos_por_imagens(imgs)
     sa = data.get('sa')
     gpon = data.get('gpon')
     serial_modem = data.get('serial_do_modem')
@@ -346,13 +349,16 @@ async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data['serial_modem'] = serial_modem
     if mesh_list:
         context.user_data['serial_mesh'] = mesh_list[0]
+    mesh_text = ', '.join(mesh_list) if mesh_list else 'não informado'
     msg = (
         '🧠 *Autopreenchimento por Foto*\n\n'
         f"SA: `{escape_markdown(sa)}`\n"
         f"GPON: `{escape_markdown(gpon)}`\n"
         f"Serial Modem: `{escape_markdown(serial_modem)}`\n"
-        f"Mesh: `{escape_markdown(mesh_list[0] if mesh_list else 'não informado')}`\n\n"
+        f"Mesh: `{escape_markdown(mesh_text)}`\n"
+        f"Prints usados: {len(imgs)}\n\n"
     )
+    await update.message.reply_text(msg, parse_mode='Markdown')
     if sa and gpon:
         keyboard = [
             [InlineKeyboardButton('Instalação', callback_data='instalacao')],
@@ -362,8 +368,7 @@ async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_T
             [InlineKeyboardButton('Serviços', callback_data='servicos')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        msg += 'Selecione o *tipo de serviço*:'
-        await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+        await update.message.reply_text('Selecione o *tipo de serviço*:', reply_markup=reply_markup, parse_mode='Markdown')
         return AGUARDANDO_TIPO
     if not sa:
         await update.message.reply_text('Envie o *número da SA*:', parse_mode='Markdown')
