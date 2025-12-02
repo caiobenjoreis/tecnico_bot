@@ -355,10 +355,8 @@ async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_T
         d_serial = await extrair_campo_especifico(imgs, 'serial_do_modem')
         if d_serial.get('serial_do_modem'):
             data['serial_do_modem'] = d_serial['serial_do_modem']
-    if not data.get('mesh'):
-        d_mesh = await extrair_campo_especifico(imgs, 'mesh')
-        if d_mesh.get('mesh'):
-            data['mesh'] = d_mesh['mesh']
+    # Não extrair mesh nesta etapa para evitar falsos positivos
+    data['mesh'] = []
     sa = data.get('sa')
     gpon = data.get('gpon')
     serial_modem = data.get('serial_do_modem')
@@ -373,7 +371,7 @@ async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_T
         serial_modem = None
     if mesh_list:
         context.user_data['mesh_candidates'] = mesh_list
-    mesh_text = ', '.join(mesh_list) if mesh_list else 'não informado'
+    mesh_text = 'não informado'
     msg = (
         '🧠 *Autopreenchimento por Foto*\n\n'
         f"SA: `{escape_markdown(sa)}`\n"

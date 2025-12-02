@@ -147,7 +147,7 @@ async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
         sa = sa if is_valid_sa(sa) else None
         gpon = gpon if is_valid_gpon(gpon) else None
         serial = serial if is_valid_serial(serial) else None
-        mesh = [m.upper() for m in mesh_matches if is_valid_serial(m)]
+        mesh = [m.upper() for m in mesh_matches if is_valid_serial(m) and (not gpon or m.upper() != gpon)]
         return {"sa": sa, "gpon": gpon, "serial_do_modem": serial, "mesh": mesh}
     def pick(d, keys):
         for k in keys:
@@ -166,7 +166,16 @@ async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
         mesh_list = [mesh_raw]
     else:
         mesh_list = list(mesh_raw)
-    mesh = [str(m).strip().upper() for m in mesh_list if is_valid_serial(str(m).strip().upper())]
+    mesh = []
+    for m in mesh_list:
+        s = str(m).strip().upper()
+        if not s:
+            continue
+        if not is_valid_serial(s):
+            continue
+        if gpon and s == gpon:
+            continue
+        mesh.append(s)
     if sa and re.fullmatch(r"\d{5,}", sa):
         sa = f"SA-{sa}"
     sa = sa if is_valid_sa(sa) else None
