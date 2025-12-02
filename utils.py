@@ -245,4 +245,21 @@ async def extrair_campo_especifico(images: List[bytes], campo: str) -> dict:
         except Exception as e:
             logging.error(f"Groq vision targeted falhou com modelo {m}: {e}")
             continue
+    # Fallback de regex com base no texto retornado
+    try:
+        t = txt_last or ""
+        if campo == "sa":
+            m_sa = re.search(r"SA[-\s:]?\s*(\d{5,})", t, re.I)
+            return {"sa": (f"SA-{m_sa.group(1)}" if m_sa else None)}
+        if campo == "gpon":
+            m_gp = re.search(r"Acesso\s*GPON\s*[:]?\s*([A-Z0-9]{6,16})", t, re.I)
+            return {"gpon": (m_gp.group(1).upper() if m_gp else None)}
+        if campo == "serial_do_modem":
+            m_se = re.search(r"(Número\s*de\s*série|Serial|SÉRIE)\s*[:]?\s*([A-Z0-9]{8,20})", t, re.I)
+            return {"serial_do_modem": (m_se.group(2).upper() if m_se else None)}
+        if campo == "mesh":
+            ms = re.findall(r"MESH[^\n]*?([A-Z0-9]{8,20})", t, re.I)
+            return {"mesh": [m.upper() for m in ms]}
+    except Exception:
+        pass
     return {}

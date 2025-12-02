@@ -489,11 +489,26 @@ async def receber_serial(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receber_serial_por_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo = update.message.photo[-2] if len(update.message.photo) > 1 else update.message.photo[-1]
+    image_bytes = None
     try:
         file = await photo.get_file()
         mem = await file.download_to_memory()
-        image_bytes = mem.getvalue()
-    except Exception:
+        try:
+            image_bytes = mem.getvalue() if hasattr(mem, 'getvalue') else (mem if isinstance(mem, (bytes, bytearray)) else None)
+        except Exception:
+            image_bytes = None
+        if not image_bytes:
+            # Fallback: salvar em disco temporário
+            tmp = f"tmp_{photo.file_unique_id}.jpg"
+            await file.download_to_drive(tmp)
+            with open(tmp, 'rb') as f:
+                image_bytes = f.read()
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.error(f"Falha ao baixar foto do serial: {e}")
         await update.message.reply_text('❌ Não consegui processar a imagem. Envie novamente ou digite o serial.')
         return AGUARDANDO_SERIAL
     imgs = context.user_data.get('autofill_images') or []
@@ -534,11 +549,25 @@ async def receber_serial_mesh(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def receber_serial_mesh_por_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo = update.message.photo[-2] if len(update.message.photo) > 1 else update.message.photo[-1]
+    image_bytes = None
     try:
         file = await photo.get_file()
         mem = await file.download_to_memory()
-        image_bytes = mem.getvalue()
-    except Exception:
+        try:
+            image_bytes = mem.getvalue() if hasattr(mem, 'getvalue') else (mem if isinstance(mem, (bytes, bytearray)) else None)
+        except Exception:
+            image_bytes = None
+        if not image_bytes:
+            tmp = f"tmp_{photo.file_unique_id}.jpg"
+            await file.download_to_drive(tmp)
+            with open(tmp, 'rb') as f:
+                image_bytes = f.read()
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.error(f"Falha ao baixar foto do mesh: {e}")
         await update.message.reply_text('❌ Não consegui processar a imagem. Envie novamente ou digite o serial mesh.')
         return AGUARDANDO_SERIAL_MESH
     imgs = context.user_data.get('autofill_images') or []
