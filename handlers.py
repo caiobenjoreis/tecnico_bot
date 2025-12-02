@@ -323,7 +323,7 @@ async def receber_gpon(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         prompt = (
             '✅ *GPON Registrado!*\n'
-            f'� GPON: `{gpon}`\n\n'
+            f'🔗 GPON: `{gpon}`\n\n'
             '📝 *[Etapa 3/5]*\n'
             'Selecione o *tipo de reparo*:'
         )
@@ -337,7 +337,7 @@ async def receber_gpon(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         prompt = (
             '✅ *GPON Registrado!*\n'
-            f'� GPON: `{gpon}`\n\n'
+            f'🔗 GPON: `{gpon}`\n\n'
             '📝 *[Etapa 3/5]*\n'
             'Selecione o *tipo de serviço*:'
         )
@@ -481,7 +481,7 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             '━━━━━━━━━━━━━━━━━━━━\n\n',
             '📋 *Detalhes:*\n',
             f'🔖 SA: `{nova_instalacao["sa"]}`\n',
-            f'� GPON: `{nova_instalacao["gpon"]}`\n'
+            f'🔗 GPON: `{nova_instalacao["gpon"]}`\n'
         ]
     
         if nova_instalacao.get("serial_modem"):
@@ -553,7 +553,7 @@ async def consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         msg_parts = [
             f'📋 *SA:* `{resultado["sa"]}`\n',
-            f'� *GPON:* `{resultado["gpon"]}`\n'
+            f'🔗 *GPON:* `{resultado["gpon"]}`\n'
         ]
         
         if resultado.get("serial_modem"):
