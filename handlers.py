@@ -4,9 +4,7 @@ from config import *
 from database import db
 from datetime import datetime
 from reports import gerar_texto_producao, gerar_ranking_texto
-from utils import ciclo_atual, escape_markdown, extrair_campos_por_imagem, extrair_campos_por_imagens, extrair_campo_especifico
-import io
-import os
+from utils import ciclo_atual
 import logging
 
 logger = logging.getLogger(__name__)
@@ -307,91 +305,6 @@ async def receber_sa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return AGUARDANDO_GPON
 
-async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = update.message.photo[-2] if len(update.message.photo) > 1 else update.message.photo[-1]
-    try:
-        file = await photo.get_file()
-    except Exception:
-        await update.message.reply_text('❌ Não consegui acessar a imagem. Envie novamente ou digite a SA.')
-        return AGUARDANDO_SA
-    image_bytes = None
-    try:
-        mem = await file.download_to_memory()
-        image_bytes = mem.getvalue()
-    except Exception:
-        try:
-            tmp = f"tmp_{photo.file_unique_id}.jpg"
-            await file.download_to_drive(tmp)
-            with open(tmp, 'rb') as f:
-                image_bytes = f.read()
-            try:
-                os.remove(tmp)
-            except Exception:
-                pass
-        except Exception:
-            pass
-    if not image_bytes:
-        await update.message.reply_text('❌ Não consegui processar a imagem. Envie novamente (print recortado) ou digite a SA.')
-        return AGUARDANDO_SA
-    imgs = context.user_data.get('autofill_images') or []
-    imgs.append(image_bytes)
-    context.user_data['autofill_images'] = imgs
-    data = await extrair_campos_por_imagens(imgs)
-    if not data.get('sa'):
-        d_sa = await extrair_campo_especifico(imgs, 'sa')
-        if d_sa.get('sa'):
-            data['sa'] = d_sa['sa']
-    if not data.get('gpon'):
-        d_gpon = await extrair_campo_especifico(imgs, 'gpon')
-        if d_gpon.get('gpon'):
-            data['gpon'] = d_gpon['gpon']
-    if not data.get('serial_do_modem'):
-        d_serial = await extrair_campo_especifico(imgs, 'serial_do_modem')
-        if d_serial.get('serial_do_modem'):
-            data['serial_do_modem'] = d_serial['serial_do_modem']
-    if not data.get('mesh'):
-        d_mesh = await extrair_campo_especifico(imgs, 'mesh')
-        if d_mesh.get('mesh'):
-            data['mesh'] = d_mesh['mesh']
-    sa = data.get('sa')
-    gpon = data.get('gpon')
-    serial_modem = data.get('serial_do_modem')
-    mesh_list = data.get('mesh') or []
-    if sa:
-        context.user_data['sa'] = sa
-    if gpon:
-        context.user_data['gpon'] = gpon
-    if serial_modem:
-        context.user_data['serial_modem'] = serial_modem
-    if mesh_list:
-        context.user_data['mesh_candidates'] = mesh_list
-    mesh_text = ', '.join(mesh_list) if mesh_list else 'não informado'
-    msg = (
-        '🧠 *Autopreenchimento por Foto*\n\n'
-        f"SA: `{escape_markdown(sa)}`\n"
-        f"GPON: `{escape_markdown(gpon)}`\n"
-        f"Serial Modem: `{escape_markdown(serial_modem)}`\n"
-        f"Mesh: `{escape_markdown(mesh_text)}`\n"
-        f"Prints usados: {len(imgs)}\n\n"
-    )
-    await update.message.reply_text(msg, parse_mode='Markdown')
-    if sa and gpon:
-        keyboard = [
-            [InlineKeyboardButton('Instalação', callback_data='instalacao')],
-            [InlineKeyboardButton('Instalação TV', callback_data='instalacao_tv')],
-            [InlineKeyboardButton('Instalação + Mesh', callback_data='instalacao_mesh')],
-            [InlineKeyboardButton('Mudança de Endereço', callback_data='mudanca_endereco')],
-            [InlineKeyboardButton('Serviços', callback_data='servicos')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text('Selecione o *tipo de serviço*:', reply_markup=reply_markup, parse_mode='Markdown')
-        return AGUARDANDO_TIPO
-    if not sa:
-        await update.message.reply_text('Envie o *número da SA*:', parse_mode='Markdown')
-        return AGUARDANDO_SA
-    await update.message.reply_text('Agora digite o *GPON*:', parse_mode='Markdown')
-    return AGUARDANDO_GPON
-
 async def receber_gpon(update: Update, context: ContextTypes.DEFAULT_TYPE):
     gpon = update.message.text.strip()
     context.user_data['gpon'] = gpon
@@ -485,39 +398,6 @@ async def receber_serial(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return AGUARDANDO_FOTOS
 
-async def receber_serial_por_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = update.message.photo[-2] if len(update.message.photo) > 1 else update.message.photo[-1]
-    try:
-        file = await photo.get_file()
-        mem = await file.download_to_memory()
-        image_bytes = mem.getvalue()
-    except Exception:
-        await update.message.reply_text('❌ Não consegui processar a imagem. Envie novamente ou digite o serial.')
-        return AGUARDANDO_SERIAL
-    imgs = context.user_data.get('autofill_images') or []
-    imgs.append(image_bytes)
-    context.user_data['autofill_images'] = imgs
-    d = await extrair_campo_especifico(imgs, 'serial_do_modem')
-    serial = d.get('serial_do_modem')
-    if not serial:
-        await update.message.reply_text('❌ Não consegui extrair o serial. Digite o número de série do modem.')
-        return AGUARDANDO_SERIAL
-    context.user_data['serial_modem'] = serial
-    if context.user_data.get('tipo') == 'instalacao_mesh':
-        # Se já houver candidatos de mesh detectados anteriormente, pré-preenche
-        mesh_candidates = context.user_data.get('mesh_candidates') or []
-        if mesh_candidates and not context.user_data.get('serial_mesh'):
-            context.user_data['serial_mesh'] = mesh_candidates[0]
-            await update.message.reply_text(
-                f"✅ *Serial Modem Detectado!*\n\n📶 Mesh detectado: `{escape_markdown(mesh_candidates[0])}`\n📝 *[Etapa 5/6]*\nSe quiser alterar, envie uma foto do roteador mesh; caso contrário, siga com as fotos da instalação.",
-                parse_mode='Markdown'
-            )
-            return AGUARDANDO_SERIAL_MESH
-        await update.message.reply_text('✅ *Serial Modem Detectado!*\n\n📝 *[Etapa 5/6]*\nAgora envie o *Serial do Roteador Mesh*:', parse_mode='Markdown')
-        return AGUARDANDO_SERIAL_MESH
-    await update.message.reply_text('✅ *Serial Detectado!*\n\n📝 *[Etapa 5/5]*\nAgora envie as *3 fotos* da instalação.\nQuando terminar, digite /finalizar', parse_mode='Markdown')
-    return AGUARDANDO_FOTOS
-
 async def receber_serial_mesh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     serial_mesh = update.message.text.strip()
     context.user_data['serial_mesh'] = serial_mesh
@@ -528,27 +408,6 @@ async def receber_serial_mesh(update: Update, context: ContextTypes.DEFAULT_TYPE
         'Quando terminar, digite /finalizar',
         parse_mode='Markdown'
     )
-    return AGUARDANDO_FOTOS
-
-async def receber_serial_mesh_por_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = update.message.photo[-2] if len(update.message.photo) > 1 else update.message.photo[-1]
-    try:
-        file = await photo.get_file()
-        mem = await file.download_to_memory()
-        image_bytes = mem.getvalue()
-    except Exception:
-        await update.message.reply_text('❌ Não consegui processar a imagem. Envie novamente ou digite o serial mesh.')
-        return AGUARDANDO_SERIAL_MESH
-    imgs = context.user_data.get('autofill_images') or []
-    imgs.append(image_bytes)
-    context.user_data['autofill_images'] = imgs
-    d = await extrair_campo_especifico(imgs, 'mesh')
-    mesh_list = d.get('mesh') or []
-    if not mesh_list:
-        await update.message.reply_text('❌ Não consegui extrair o serial mesh. Digite o serial do roteador.')
-        return AGUARDANDO_SERIAL_MESH
-    context.user_data['serial_mesh'] = mesh_list[0]
-    await update.message.reply_text('✅ *Serial Mesh Detectado!*\n\n📝 *[Etapa 6/6]*\nAgora envie as *3 fotos* da instalação.\nQuando terminar, digite /finalizar', parse_mode='Markdown')
     return AGUARDANDO_FOTOS
 
 async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
