@@ -5,6 +5,26 @@ import json
 import re
 import logging
 from typing import List
+
+def is_valid_sa(sa: str) -> bool:
+    try:
+        return bool(re.fullmatch(r"SA-\d{5,}", sa or ""))
+    except Exception:
+        return False
+
+def is_valid_gpon(gpon: str) -> bool:
+    try:
+        return bool(re.fullmatch(r"[A-Z0-9]{6,16}", gpon or ""))
+    except Exception:
+        return False
+
+def is_valid_serial(s: str) -> bool:
+    try:
+        if not s: return False
+        if s.upper().startswith("SA-"): return False
+        return bool(re.fullmatch(r"[A-Z0-9]{8,20}", s))
+    except Exception:
+        return False
 try:
     from groq import Groq
 except Exception:
@@ -123,10 +143,13 @@ async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
         serial_match = re.search(r"(Número\s*de\s*série|Serial)\s*[:]?\s*([A-Z0-9]{8,20})", text, re.I)
         mesh_matches = re.findall(r"MESH[^\n]*?([A-Z0-9]{8,20})", text, re.I)
         sa = (f"SA-{sa_match.group(1)}" if sa_match else None)
-        gpon = (gpon_match.group(1) if gpon_match else None)
-        serial = (serial_match.group(2) if serial_match else None)
-        mesh = [m.upper() for m in mesh_matches]
-        return {"sa": sa, "gpon": gpon, "serial_do_modem": (serial.upper() if serial else None), "mesh": mesh}
+        gpon = (gpon_match.group(1).upper() if gpon_match else None)
+        serial = (serial_match.group(2).upper() if serial_match else None)
+        sa = sa if is_valid_sa(sa) else None
+        gpon = gpon if is_valid_gpon(gpon) else None
+        serial = serial if is_valid_serial(serial) else None
+        mesh = [m.upper() for m in mesh_matches if is_valid_serial(m)]
+        return {"sa": sa, "gpon": gpon, "serial_do_modem": serial, "mesh": mesh}
     def pick(d, keys):
         for k in keys:
             v = d.get(k)
@@ -144,9 +167,12 @@ async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
         mesh_list = [mesh_raw]
     else:
         mesh_list = list(mesh_raw)
-    mesh = [str(m).strip().upper() for m in mesh_list if m]
+    mesh = [str(m).strip().upper() for m in mesh_list if is_valid_serial(str(m).strip().upper())]
     if sa and re.fullmatch(r"\d{5,}", sa):
         sa = f"SA-{sa}"
+    sa = sa if is_valid_sa(sa) else None
+    gpon = gpon if is_valid_gpon(gpon) else None
+    serial = serial if is_valid_serial(serial) else None
     return {
         "sa": sa,
         "gpon": gpon,
@@ -163,11 +189,20 @@ async def extrair_campos_por_imagens(images: list) -> dict:
             d = {}
         for k in ["sa", "gpon", "serial_do_modem"]:
             v = d.get(k)
-            if v and not agg[k]:
+            if not v: continue
+            if k == "sa" and not is_valid_sa(v):
+                continue
+            if k == "gpon" and not is_valid_gpon(v):
+                continue
+            if k == "serial_do_modem" and not is_valid_serial(v):
+                continue
+            if not agg[k]:
                 agg[k] = v
         ms = d.get("mesh") or []
         for m in ms:
-            if m and m not in agg["mesh"]:
+            if not is_valid_serial(m):
+                continue
+            if m not in agg["mesh"]:
                 agg["mesh"].append(m)
     return agg
 
