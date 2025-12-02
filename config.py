@@ -9,6 +9,10 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 USE_SUPABASE = bool(SUPABASE_URL and SUPABASE_KEY)
 
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL") or "meta-llama/llama-4-scout-17b-16e-instruct"
+USE_GROQ = bool(GROQ_API_KEY)
+
 # IDs de Administradores
 ADMIN_IDS = [
     1797158471,  # Admin principal

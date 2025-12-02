@@ -12,7 +12,7 @@ from keep_alive import keep_alive
 from handlers import (
     start, ajuda, cancelar, meu_id,
     receber_nome, receber_sobrenome, receber_regiao,
-    receber_sa, receber_gpon, receber_tipo, receber_serial, receber_serial_mesh, receber_foto, finalizar,
+    receber_sa, receber_gpon, receber_tipo, receber_serial, receber_serial_mesh, receber_foto, finalizar, receber_print_autofill, receber_serial_por_foto, receber_serial_mesh_por_foto,
     button_callback, consultar, comando_consultar, comando_reparo, comando_producao,
     comando_mensal, comando_semanal, comando_hoje, receber_data_inicio, receber_data_fim
 )
@@ -84,11 +84,20 @@ def main():
             AGUARDANDO_REGIAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_regiao)],
             
             # Fluxo de Registro
-            AGUARDANDO_SA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_sa)],
+            AGUARDANDO_SA: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_sa),
+                MessageHandler(filters.PHOTO, receber_print_autofill)
+            ],
             AGUARDANDO_GPON: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_gpon)],
             AGUARDANDO_TIPO: [CallbackQueryHandler(receber_tipo)],
-            AGUARDANDO_SERIAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_serial)],
-            AGUARDANDO_SERIAL_MESH: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_serial_mesh)],
+            AGUARDANDO_SERIAL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_serial),
+                MessageHandler(filters.PHOTO, receber_serial_por_foto)
+            ],
+            AGUARDANDO_SERIAL_MESH: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_serial_mesh),
+                MessageHandler(filters.PHOTO, receber_serial_mesh_por_foto)
+            ],
             AGUARDANDO_FOTOS: [
                 MessageHandler(filters.PHOTO, receber_foto),
                 CommandHandler('finalizar', finalizar),

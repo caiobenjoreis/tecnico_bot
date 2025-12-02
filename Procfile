@@ -1,1 +1,1 @@
-web: python -m novo_bot.app
+web: python tecnico_bot
