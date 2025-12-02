@@ -4,6 +4,7 @@ import base64
 import json
 import re
 import logging
+from typing import List
 try:
     from groq import Groq
 except Exception:
@@ -116,7 +117,6 @@ async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
             logging.error(f"Groq vision falhou com modelo {m}: {e}")
             continue
     if not data:
-        # Fallback: tentar extrair via texto bruto
         text = txt_last
         sa_match = re.search(r"SA[-\s:]?\s*(\d{5,})", text, re.I)
         gpon_match = re.search(r"Acesso\s*GPON\s*[:]?\s*([A-Z0-9]{6,16})", text, re.I)
@@ -170,3 +170,45 @@ async def extrair_campos_por_imagens(images: list) -> dict:
             if m and m not in agg["mesh"]:
                 agg["mesh"].append(m)
     return agg
+
+async def extrair_campo_especifico(images: List[bytes], campo: str) -> dict:
+    if not USE_GROQ or not GROQ_API_KEY or Groq is None:
+        return {}
+    client = Groq(api_key=GROQ_API_KEY)
+    models = [
+        GROQ_MODEL or "meta-llama/llama-4-scout-17b-16e-instruct",
+        "meta-llama/llama-4-maverick-17b-128e-instruct",
+        "llama-3.2-90b-vision-preview",
+    ]
+    prompt_map = {
+        "sa": "Retorne JSON {\"sa\": \"SA-<digitos>\"} apenas.",
+        "gpon": "Retorne JSON {\"gpon\": \"<alfa-num 6-16 maiusculas>\"} apenas.",
+        "serial_do_modem": "Retorne JSON {\"serial_do_modem\": \"<alfa-num 8-20 maiusculas>\"} apenas.",
+        "mesh": "Retorne JSON {\"mesh\": [\"<seriais mesh>\"]} apenas.",
+    }
+    txt_last = ""
+    for m in models:
+        try:
+            contents = []
+            contents.append({"type": "text", "text": prompt_map.get(campo, "Retorne JSON do campo solicitado.")})
+            for img in images:
+                b64 = base64.b64encode(img).decode("ascii")
+                contents.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+            resp = client.chat.completions.create(
+                model=m,
+                temperature=0,
+                response_format={"type": "json_object"},
+                max_completion_tokens=256,
+                messages=[{"role": "user", "content": contents}],
+            )
+            txt = resp.choices[0].message.content if resp and resp.choices else "{}"
+            txt_last = txt or ""
+            try:
+                data = json.loads(txt)
+                return data
+            except Exception:
+                continue
+        except Exception as e:
+            logging.error(f"Groq vision targeted falhou com modelo {m}: {e}")
+            continue
+    return {}

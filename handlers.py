@@ -4,7 +4,7 @@ from config import *
 from database import db
 from datetime import datetime
 from reports import gerar_texto_producao, gerar_ranking_texto
-from utils import ciclo_atual, escape_markdown, extrair_campos_por_imagem, extrair_campos_por_imagens
+from utils import ciclo_atual, escape_markdown, extrair_campos_por_imagem, extrair_campos_por_imagens, extrair_campo_especifico
 import io
 import os
 import logging
@@ -337,6 +337,22 @@ async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_T
     imgs.append(image_bytes)
     context.user_data['autofill_images'] = imgs
     data = await extrair_campos_por_imagens(imgs)
+    if not data.get('sa'):
+        d_sa = await extrair_campo_especifico(imgs, 'sa')
+        if d_sa.get('sa'):
+            data['sa'] = d_sa['sa']
+    if not data.get('gpon'):
+        d_gpon = await extrair_campo_especifico(imgs, 'gpon')
+        if d_gpon.get('gpon'):
+            data['gpon'] = d_gpon['gpon']
+    if not data.get('serial_do_modem'):
+        d_serial = await extrair_campo_especifico(imgs, 'serial_do_modem')
+        if d_serial.get('serial_do_modem'):
+            data['serial_do_modem'] = d_serial['serial_do_modem']
+    if not data.get('mesh'):
+        d_mesh = await extrair_campo_especifico(imgs, 'mesh')
+        if d_mesh.get('mesh'):
+            data['mesh'] = d_mesh['mesh']
     sa = data.get('sa')
     gpon = data.get('gpon')
     serial_modem = data.get('serial_do_modem')
