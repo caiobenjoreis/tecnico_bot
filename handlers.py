@@ -4,6 +4,7 @@ from config import *
 from database import db
 from datetime import datetime
 from reports import gerar_texto_producao, gerar_ranking_texto
+from utils import ciclo_atual
 import logging
 
 logger = logging.getLogger(__name__)
