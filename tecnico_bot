@@ -90,8 +90,14 @@ def main():
             ],
             AGUARDANDO_GPON: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_gpon)],
             AGUARDANDO_TIPO: [CallbackQueryHandler(receber_tipo)],
-            AGUARDANDO_SERIAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_serial)],
-            AGUARDANDO_SERIAL_MESH: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_serial_mesh)],
+            AGUARDANDO_SERIAL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_serial),
+                MessageHandler(filters.PHOTO, receber_serial_por_foto)
+            ],
+            AGUARDANDO_SERIAL_MESH: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receber_serial_mesh),
+                MessageHandler(filters.PHOTO, receber_serial_mesh_por_foto)
+            ],
             AGUARDANDO_FOTOS: [
                 MessageHandler(filters.PHOTO, receber_foto),
                 CommandHandler('finalizar', finalizar),

@@ -80,10 +80,9 @@ def ciclo_atual():
     return inicio, fim
 
 def escape_markdown(text):
-    """Escapa caracteres especiais para MarkdownV2."""
     if text is None:
         return 'não informada'
-    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '=', '|', '{', '}', '.', '!']
     text = str(text)
     for char in special_chars:
         text = text.replace(char, f'\\{char}')

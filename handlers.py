@@ -485,6 +485,30 @@ async def receber_serial(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return AGUARDANDO_FOTOS
 
+async def receber_serial_por_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    photo = update.message.photo[-2] if len(update.message.photo) > 1 else update.message.photo[-1]
+    try:
+        file = await photo.get_file()
+        mem = await file.download_to_memory()
+        image_bytes = mem.getvalue()
+    except Exception:
+        await update.message.reply_text('❌ Não consegui processar a imagem. Envie novamente ou digite o serial.')
+        return AGUARDANDO_SERIAL
+    imgs = context.user_data.get('autofill_images') or []
+    imgs.append(image_bytes)
+    context.user_data['autofill_images'] = imgs
+    d = await extrair_campo_especifico(imgs, 'serial_do_modem')
+    serial = d.get('serial_do_modem')
+    if not serial:
+        await update.message.reply_text('❌ Não consegui extrair o serial. Digite o número de série do modem.')
+        return AGUARDANDO_SERIAL
+    context.user_data['serial_modem'] = serial
+    if context.user_data.get('tipo') == 'instalacao_mesh':
+        await update.message.reply_text('✅ *Serial Modem Detectado!*\n\n📝 *[Etapa 5/6]*\nAgora envie o *Serial do Roteador Mesh*:', parse_mode='Markdown')
+        return AGUARDANDO_SERIAL_MESH
+    await update.message.reply_text('✅ *Serial Detectado!*\n\n📝 *[Etapa 5/5]*\nAgora envie as *3 fotos* da instalação.\nQuando terminar, digite /finalizar', parse_mode='Markdown')
+    return AGUARDANDO_FOTOS
+
 async def receber_serial_mesh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     serial_mesh = update.message.text.strip()
     context.user_data['serial_mesh'] = serial_mesh
@@ -495,6 +519,27 @@ async def receber_serial_mesh(update: Update, context: ContextTypes.DEFAULT_TYPE
         'Quando terminar, digite /finalizar',
         parse_mode='Markdown'
     )
+    return AGUARDANDO_FOTOS
+
+async def receber_serial_mesh_por_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    photo = update.message.photo[-2] if len(update.message.photo) > 1 else update.message.photo[-1]
+    try:
+        file = await photo.get_file()
+        mem = await file.download_to_memory()
+        image_bytes = mem.getvalue()
+    except Exception:
+        await update.message.reply_text('❌ Não consegui processar a imagem. Envie novamente ou digite o serial mesh.')
+        return AGUARDANDO_SERIAL_MESH
+    imgs = context.user_data.get('autofill_images') or []
+    imgs.append(image_bytes)
+    context.user_data['autofill_images'] = imgs
+    d = await extrair_campo_especifico(imgs, 'mesh')
+    mesh_list = d.get('mesh') or []
+    if not mesh_list:
+        await update.message.reply_text('❌ Não consegui extrair o serial mesh. Digite o serial do roteador.')
+        return AGUARDANDO_SERIAL_MESH
+    context.user_data['serial_mesh'] = mesh_list[0]
+    await update.message.reply_text('✅ *Serial Mesh Detectado!*\n\n📝 *[Etapa 6/6]*\nAgora envie as *3 fotos* da instalação.\nQuando terminar, digite /finalizar', parse_mode='Markdown')
     return AGUARDANDO_FOTOS
 
 async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
