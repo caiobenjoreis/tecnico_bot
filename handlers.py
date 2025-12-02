@@ -490,7 +490,8 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if nova_instalacao.get("serial_mesh"):
             msg_parts.append(f'📶 Serial Mesh: `{nova_instalacao["serial_mesh"]}`\n')
     
-        status_msg = '📡 Cliente conectado\\! 📈 Produção atualizada no sistema\\!' if nova_instalacao['categoria'] != 'reparo' else '🛠️ Atendimento registrado\\! 📈 Produção atualizada no sistema\\!'
+        status_msg = '📡 Cliente conectado\\! 📈 Produção atualizada. \\!' if nova_instalacao['categoria'] != 'reparo' else '🛠️ Atendimento registrado\\! 📈 Produção atualizada. \\!'
+        registro_msg = '📝 Instalação registrada no @tecnico\\_bot\\!' if nova_instalacao['categoria'] != 'reparo' else '🛠️ Reparo registrado no @tecnico\\_bot\\!'
 
         msg_parts.extend([
             f'🧩 Tipo: {escape_markdown_v2(nova_instalacao["tipo"])}\n',
@@ -500,7 +501,8 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f'📍 *Região:* {escape_markdown_v2(nova_instalacao["tecnico_regiao"])}\n',
             f'📅 *Data:* {escape_markdown_v2(nova_instalacao["data"])}\n\n',
             '🎉 Ótimo trabalho\\!\n',
-            f'{status_msg}\n\n',
+            f'{status_msg}\n',
+            f'{registro_msg}\n\n',
             '🔁 Use /start para nova ação\\.'
         ])
         await update.message.reply_text(''.join(msg_parts), parse_mode='MarkdownV2')
