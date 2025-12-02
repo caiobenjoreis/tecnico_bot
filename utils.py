@@ -89,6 +89,8 @@ async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
         resp = client.chat.completions.create(
             model=GROQ_MODEL,
             temperature=0,
+            response_format={"type": "json_object"},
+            max_completion_tokens=512,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": content},
