@@ -186,7 +186,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.from_user
+    user = update.effective_user
     user_id = user.id
     username = user.username or user.first_name
     
@@ -194,13 +194,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_user = await db.get_user(str(user_id))
     
     if not db_user:
-        await update.message.reply_text(
+        msg_text = (
             f'👋 Olá, {username}!\n\n'
             'Bem-vindo ao *Bot Técnico*.\n'
             'Para começar, preciso de alguns dados.\n\n'
-            'Digite seu *Nome*:',
-            parse_mode='Markdown'
+            'Digite seu *Nome*:'
         )
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(
+                msg_text,
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                msg_text,
+                parse_mode='Markdown'
+            )
         return AGUARDANDO_NOME
     
     await exibir_menu_principal(update, context, username)
@@ -208,20 +218,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def exibir_menu_principal(update: Update, context: ContextTypes.DEFAULT_TYPE, username: str):
     keyboard = [
-        [InlineKeyboardButton("📝 Registrar Instalação", callback_data='registrar')],
-        [InlineKeyboardButton("🛠️ Registrar Reparo", callback_data='registrar_reparo')],
-        [InlineKeyboardButton("🔎 Consultar", callback_data='consultar')],
+        [InlineKeyboardButton("📝 Nova Instalação", callback_data='registrar')],
+        [InlineKeyboardButton("🛠️ Novo Reparo", callback_data='registrar_reparo')],
+        [InlineKeyboardButton("🔎 Consultar SA/GPON", callback_data='consultar')],
         [InlineKeyboardButton("📂 Minhas Instalações", callback_data='minhas')],
-        [InlineKeyboardButton("📊 Minha Produção", callback_data='consulta_producao')],
+        [InlineKeyboardButton("📊 Produção do Ciclo", callback_data='consulta_producao')],
         [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     msg = (
-        f'🔧 *Painel do Técnico*\n'
-        f'👤 Usuário: {username}\n\n'
-        'Selecione uma opção:'
+        '🤖 *Bot Técnico*\n'
+        f'👤 {username}\n\n'
+        '📡 Seu assistente de campo.\n'
+        '🏆 Qualidade e agilidade. Bora bater meta hoje! 🚀'
     )
     
     if update.callback_query:
@@ -312,7 +323,7 @@ async def receber_gpon(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         prompt = (
             '✅ *GPON Registrado!*\n'
-            f'🔌 GPON: `{gpon}`\n\n'
+            f'� GPON: `{gpon}`\n\n'
             '📝 *[Etapa 3/5]*\n'
             'Selecione o *tipo de reparo*:'
         )
@@ -326,7 +337,7 @@ async def receber_gpon(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         prompt = (
             '✅ *GPON Registrado!*\n'
-            f'🔌 GPON: `{gpon}`\n\n'
+            f'� GPON: `{gpon}`\n\n'
             '📝 *[Etapa 3/5]*\n'
             'Selecione o *tipo de serviço*:'
         )
@@ -469,25 +480,28 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f'{titulo}\n',
             '━━━━━━━━━━━━━━━━━━━━\n\n',
             '📋 *Detalhes:*\n',
-            f'• SA: `{nova_instalacao["sa"]}`\n',
-            f'• GPON: `{nova_instalacao["gpon"]}`\n'
+            f'🔖 SA: `{nova_instalacao["sa"]}`\n',
+            f'� GPON: `{nova_instalacao["gpon"]}`\n'
         ]
     
         if nova_instalacao.get("serial_modem"):
-            msg_parts.append(f'• Serial Modem: `{nova_instalacao["serial_modem"]}`\n')
+            msg_parts.append(f'📟 Serial Modem: `{nova_instalacao["serial_modem"]}`\n')
             
         if nova_instalacao.get("serial_mesh"):
-            msg_parts.append(f'• Serial Mesh: `{nova_instalacao["serial_mesh"]}`\n')
+            msg_parts.append(f'📶 Serial Mesh: `{nova_instalacao["serial_mesh"]}`\n')
     
+        status_msg = '📡 Cliente conectado\\! 📈 Produção atualizada no sistema\\!' if nova_instalacao['categoria'] != 'reparo' else '🛠️ Atendimento registrado\\! 📈 Produção atualizada no sistema\\!'
+
         msg_parts.extend([
-            f'• Tipo: {escape_markdown_v2(nova_instalacao["tipo"])}\n',
-            f'• Categoria: {escape_markdown_v2(nova_instalacao["categoria"])}\n',
-            f'• Fotos: {len(nova_instalacao["fotos"])}\n\n',
+            f'🧩 Tipo: {escape_markdown_v2(nova_instalacao["tipo"])}\n',
+            f'🏷️ Categoria: {escape_markdown_v2(nova_instalacao["categoria"])}\n',
+            f'📸 Fotos: {len(nova_instalacao["fotos"])}\n\n',
             f'👤 *Técnico:* {escape_markdown_v2(nova_instalacao["tecnico_nome"])}\n',
             f'📍 *Região:* {escape_markdown_v2(nova_instalacao["tecnico_regiao"])}\n',
             f'📅 *Data:* {escape_markdown_v2(nova_instalacao["data"])}\n\n',
-            '🎉 Ótimo trabalho\\!\n\n',
-            'Use /start para nova ação\\.'
+            '🎉 Ótimo trabalho\\!\n',
+            f'{status_msg}\n\n',
+            '🔁 Use /start para nova ação\\.'
         ])
         await update.message.reply_text(''.join(msg_parts), parse_mode='MarkdownV2')
     else:
@@ -537,7 +551,7 @@ async def consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         msg_parts = [
             f'📋 *SA:* `{resultado["sa"]}`\n',
-            f'🔌 *GPON:* `{resultado["gpon"]}`\n'
+            f'� *GPON:* `{resultado["gpon"]}`\n'
         ]
         
         if resultado.get("serial_modem"):
