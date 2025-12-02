@@ -364,7 +364,7 @@ async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_T
     if serial_modem:
         context.user_data['serial_modem'] = serial_modem
     if mesh_list:
-        context.user_data['serial_mesh'] = mesh_list[0]
+        context.user_data['mesh_candidates'] = mesh_list
     mesh_text = ', '.join(mesh_list) if mesh_list else 'não informado'
     msg = (
         '🧠 *Autopreenchimento por Foto*\n\n'
@@ -504,6 +504,15 @@ async def receber_serial_por_foto(update: Update, context: ContextTypes.DEFAULT_
         return AGUARDANDO_SERIAL
     context.user_data['serial_modem'] = serial
     if context.user_data.get('tipo') == 'instalacao_mesh':
+        # Se já houver candidatos de mesh detectados anteriormente, pré-preenche
+        mesh_candidates = context.user_data.get('mesh_candidates') or []
+        if mesh_candidates and not context.user_data.get('serial_mesh'):
+            context.user_data['serial_mesh'] = mesh_candidates[0]
+            await update.message.reply_text(
+                f"✅ *Serial Modem Detectado!*\n\n📶 Mesh detectado: `{escape_markdown(mesh_candidates[0])}`\n📝 *[Etapa 5/6]*\nSe quiser alterar, envie uma foto do roteador mesh; caso contrário, siga com as fotos da instalação.",
+                parse_mode='Markdown'
+            )
+            return AGUARDANDO_SERIAL_MESH
         await update.message.reply_text('✅ *Serial Modem Detectado!*\n\n📝 *[Etapa 5/6]*\nAgora envie o *Serial do Roteador Mesh*:', parse_mode='Markdown')
         return AGUARDANDO_SERIAL_MESH
     await update.message.reply_text('✅ *Serial Detectado!*\n\n📝 *[Etapa 5/5]*\nAgora envie as *3 fotos* da instalação.\nQuando terminar, digite /finalizar', parse_mode='Markdown')
