@@ -3,6 +3,7 @@ from config import TZ, PONTOS_SERVICO, TABELA_FAIXAS, USE_GROQ, GROQ_API_KEY, GR
 import base64
 import json
 import re
+import logging
 try:
     from groq import Groq
 except Exception:
@@ -85,20 +86,31 @@ async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
         {"type": "text", "text": user_text},
         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
     ]
-    try:
-        resp = client.chat.completions.create(
-            model=GROQ_MODEL,
-            temperature=0,
-            response_format={"type": "json_object"},
-            max_completion_tokens=512,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": content},
-            ],
-        )
-        txt = resp.choices[0].message.content if resp and resp.choices else "{}"
-        data = json.loads(txt)
-    except Exception:
+    models = [
+        GROQ_MODEL or "meta-llama/llama-4-scout-17b-16e-instruct",
+        "meta-llama/llama-4-maverick-17b-128e-instruct",
+        "llama-3.2-90b-vision-preview",
+    ]
+    data = {}
+    for m in models:
+        try:
+            resp = client.chat.completions.create(
+                model=m,
+                temperature=0,
+                response_format={"type": "json_object"},
+                max_completion_tokens=512,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": content},
+                ],
+            )
+            txt = resp.choices[0].message.content if resp and resp.choices else "{}"
+            data = json.loads(txt)
+            break
+        except Exception as e:
+            logging.error(f"Groq vision falhou com modelo {m}: {e}")
+            continue
+    if not data:
         return {}
     sa = str(data.get("sa") or "").strip().upper() or None
     gpon = str(data.get("gpon") or "").strip().upper() or None

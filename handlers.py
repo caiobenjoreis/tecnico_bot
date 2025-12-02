@@ -308,7 +308,7 @@ async def receber_sa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return AGUARDANDO_GPON
 
 async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = update.message.photo[-1]
+    photo = update.message.photo[-2] if len(update.message.photo) > 1 else update.message.photo[-1]
     try:
         file = await photo.get_file()
     except Exception:
@@ -331,7 +331,7 @@ async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_T
         except Exception:
             pass
     if not image_bytes:
-        await update.message.reply_text('❌ Não consegui ler a imagem. Envie novamente ou digite a SA.')
+        await update.message.reply_text('❌ Não consegui processar a imagem. Envie novamente (print recortado) ou digite a SA.')
         return AGUARDANDO_SA
     data = await extrair_campos_por_imagem(image_bytes)
     sa = data.get('sa')
