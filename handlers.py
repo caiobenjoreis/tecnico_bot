@@ -42,10 +42,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'consultar':
         await query.edit_message_text(
             '🔎 *Consultar Instalação*\n\n'
-            'Digite o *número da SA* ou *GPON*:\n\n'
+            'Digite o *número da SA*, *GPON* ou *Serial do Modem*:\n\n'
             '💡 Exemplos:\n'
             '• SA: 12345678\n'
-            '• GPON: ABCD1234',
+            '• GPON: ABCD1234\n'
+            '• Serial: ZTEGC8...',
             parse_mode='Markdown'
         )
         return AGUARDANDO_CONSULTA
@@ -716,7 +717,8 @@ async def consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for d in insts:
         sa = str(d.get('sa') or '').lower()
         gpon = str(d.get('gpon') or '').lower()
-        if termo in sa or termo in gpon:
+        serial = str(d.get('serial_modem') or '').lower()
+        if termo in sa or termo in gpon or termo in serial:
             resultados.append(d)
     
     if not resultados:
@@ -765,7 +767,7 @@ async def consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def comando_consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('🔎 Digite o SA ou GPON para buscar:')
+    await update.message.reply_text('🔎 Digite o SA, GPON ou Serial do Modem para buscar:')
     return AGUARDANDO_CONSULTA
 
 async def comando_reparo(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -17,7 +17,8 @@ from handlers import (
     comando_mensal, comando_semanal, comando_hoje, receber_data_inicio, receber_data_fim
 )
 from admin_handlers import (
-    admin_panel, admin_callback_handler, admin_broadcast_handler, confirmar_broadcast
+    admin_panel, admin_callback_handler, admin_broadcast_handler, confirmar_broadcast,
+    admin_poll_handler, confirmar_enquete
 )
 
 # Configuração de Logging
@@ -115,7 +116,11 @@ def main():
             AGUARDANDO_BROADCAST: [
                 MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL, admin_broadcast_handler)
             ],
-            AGUARDANDO_CONFIRMACAO_BROADCAST: [CallbackQueryHandler(confirmar_broadcast)]
+            AGUARDANDO_CONFIRMACAO_BROADCAST: [CallbackQueryHandler(confirmar_broadcast)],
+            
+            # Admin Enquete
+            AGUARDANDO_ENQUETE: [MessageHandler(filters.POLL, admin_poll_handler)],
+            AGUARDANDO_CONFIRMACAO_ENQUETE: [CallbackQueryHandler(confirmar_enquete)]
         },
         fallbacks=[CommandHandler('cancelar', cancelar)],
         per_message=False
