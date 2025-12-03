@@ -1,4 +1,4 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, constants
 from telegram.ext import ContextTypes, ConversationHandler
 from config import *
 from database import db
@@ -342,6 +342,9 @@ async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_T
     imgs = context.user_data.get('autofill_images') or []
     imgs.append(image_bytes)
     context.user_data['autofill_images'] = imgs
+    
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=constants.ChatAction.TYPING)
+    
     data = await extrair_campos_por_imagens(imgs)
     if not data.get('sa'):
         d_sa = await extrair_campo_especifico(imgs, 'sa')
@@ -518,6 +521,9 @@ async def receber_serial_por_foto(update: Update, context: ContextTypes.DEFAULT_
     imgs = context.user_data.get('autofill_images') or []
     imgs.append(image_bytes)
     context.user_data['autofill_images'] = imgs
+    
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=constants.ChatAction.TYPING)
+    
     d = await extrair_campo_especifico(imgs, 'serial_do_modem')
     serial = d.get('serial_do_modem')
     if not serial or not is_valid_serial(serial):
@@ -578,6 +584,9 @@ async def receber_serial_mesh_por_foto(update: Update, context: ContextTypes.DEF
     imgs = context.user_data.get('autofill_images') or []
     imgs.append(image_bytes)
     context.user_data['autofill_images'] = imgs
+    
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=constants.ChatAction.TYPING)
+    
     d = await extrair_campo_especifico(imgs, 'mesh')
     mesh_list = [m for m in (d.get('mesh') or []) if is_valid_serial(m)]
     if not mesh_list:

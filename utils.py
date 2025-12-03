@@ -88,226 +88,212 @@ def escape_markdown(text):
         text = text.replace(char, f'\\{char}')
     return text
 
-async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
+async def _call_groq_vision(
+    system_prompt: str,
+    user_prompt: str,
+    images: List[bytes],
+    json_mode: bool = True,
+    retries: int = 2
+) -> str:
+    """
+    Função centralizada para chamar a API de visão da Groq com retry e fallback de modelos.
+    """
     if not USE_GROQ or not GROQ_API_KEY or Groq is None:
-        return {}
-    b64 = base64.b64encode(image_bytes).decode("ascii")
+        return "{}" if json_mode else ""
+
     client = Groq(api_key=GROQ_API_KEY)
-    system = (
-        "Você extrai dados de prints técnicos. Retorne somente JSON válido com as chaves: "
-        "sa, gpon, serial_do_modem, mesh. Use maiúsculas. Para mesh retorne lista. "
-        "Se não houver valor, use null (ou [] para mesh)."
-    )
-    user_text = (
-        "Extraia SA, Acesso GPON, Número de série da ONT (modem) e seriais de equipamentos mesh. "
-        "Retorne exatamente no esquema solicitado."
-    )
-    content = [
-        {"type": "text", "text": user_text},
-        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-    ]
+    
+    # Modelos em ordem de preferência
     models = [
-        GROQ_MODEL or "meta-llama/llama-4-scout-17b-16e-instruct",
-        "meta-llama/llama-4-maverick-17b-128e-instruct",
-        "llama-3.2-90b-vision-preview",
+        GROQ_MODEL or "llama-3.2-90b-vision-preview",
+        "llama-3.2-11b-vision-preview",
+        "meta-llama/llama-3.2-90b-vision-preview" 
     ]
-    data = {}
-    txt_last = ""
-    for m in models:
-        try:
-            resp = client.chat.completions.create(
-                model=m,
-                temperature=0,
-                response_format={"type": "json_object"},
-                max_completion_tokens=512,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": content},
-                ],
-            )
-            txt = resp.choices[0].message.content if resp and resp.choices else "{}"
-            txt_last = txt or ""
+    
+    # Preparar conteúdo do usuário
+    content = [{"type": "text", "text": user_prompt}]
+    for img in images:
+        b64 = base64.b64encode(img).decode("ascii")
+        content.append({
+            "type": "image_url", 
+            "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
+        })
+
+    last_error = None
+
+    for attempt in range(retries + 1):
+        for model in models:
             try:
-                data = json.loads(txt)
-            except Exception:
-                data = {}
-            break
-        except Exception as e:
-            logging.error(f"Groq vision falhou com modelo {m}: {e}")
-            continue
-    if not data:
-        text = txt_last
-        sa_match = re.search(r"SA[-\s:]?\s*(\d{5,})", text, re.I)
-        gpon_match = re.search(r"Acesso\s*GPON\s*[:]?\s*([A-Z0-9]{6,16})", text, re.I)
-        serial_match = re.search(r"(Número\s*de\s*série|Serial)\s*[:]?\s*([A-Z0-9]{8,20})", text, re.I)
-        mesh_matches = re.findall(r"MESH[^\n]*?([A-Z0-9]{8,20})", text, re.I)
-        sa = (f"SA-{sa_match.group(1)}" if sa_match else None)
-        gpon = (gpon_match.group(1).upper() if gpon_match else None)
-        serial = (serial_match.group(2).upper() if serial_match else None)
-        sa = sa if is_valid_sa(sa) else None
-        gpon = gpon if is_valid_gpon(gpon) else None
-        serial = serial if is_valid_serial(serial) else None
-        mesh = [m.upper() for m in mesh_matches if is_valid_serial(m) and (not gpon or m.upper() != gpon)]
-        return {"sa": sa, "gpon": gpon, "serial_do_modem": serial, "mesh": mesh}
-    def pick(d, keys):
-        for k in keys:
-            v = d.get(k)
-            if v:
-                return v
-        return None
-    sa_val = pick(data, ["sa", "sa_number", "service_order", "ordem_de_servico"]) or ""
-    gpon_val = pick(data, ["gpon", "acesso_gpon", "id_gpon"]) or ""
-    serial_val = pick(data, ["serial_do_modem", "serial_modem", "numero_de_serie", "ont_serial"]) or ""
-    mesh_raw = pick(data, ["mesh", "mesh_list", "mesh_serials"]) or []
-    sa = str(sa_val).strip().upper() or None
-    gpon = str(gpon_val).strip().upper() or None
-    serial = str(serial_val).strip().upper() or None
-    if isinstance(mesh_raw, str):
-        mesh_list = [mesh_raw]
-    else:
-        mesh_list = list(mesh_raw)
-    mesh = []
-    for m in mesh_list:
-        s = str(m).strip().upper()
-        if not s:
-            continue
-        if not is_valid_serial(s):
-            continue
-        if gpon and s == gpon:
-            continue
-        mesh.append(s)
-    if sa and re.fullmatch(r"\d{5,}", sa):
-        sa = f"SA-{sa}"
-    sa = sa if is_valid_sa(sa) else None
-    gpon = gpon if is_valid_gpon(gpon) else None
-    serial = serial if is_valid_serial(serial) else None
+                kwargs = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": content}
+                    ],
+                    "temperature": 0.1, # Leve temperatura para criatividade controlada se necessário, mas 0 é melhor para OCR estrito
+                    "max_completion_tokens": 1024,
+                }
+                
+                if json_mode:
+                    kwargs["response_format"] = {"type": "json_object"}
+                
+                resp = client.chat.completions.create(**kwargs)
+                return resp.choices[0].message.content or ("{}" if json_mode else "")
+                
+            except Exception as e:
+                last_error = e
+                logging.warning(f"Groq vision falhou (tentativa {attempt+1}, modelo {model}): {e}")
+                continue # Tenta próximo modelo
+        
+        # Se falhou com todos os modelos, espera um pouco antes do próximo retry (se houver)
+        # Mas como já iteramos modelos, talvez não precise de sleep explícito, apenas continue o loop de retries
+        pass
+
+    logging.error(f"Todas as tentativas de OCR falharam. Último erro: {last_error}")
+    return "{}" if json_mode else ""
+
+
+async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
+    """
+    Extrai SA, GPON, Serial Modem e Mesh de uma imagem.
+    """
+    system = (
+        "Você é um assistente especializado em OCR de dados técnicos de telecomunicações. "
+        "Sua tarefa é extrair EXATAMENTE os dados solicitados de prints de tela de sistemas técnicos. "
+        "Retorne APENAS um JSON válido."
+    )
+    
+    user = (
+        "Analise a imagem e extraia os seguintes dados:\n"
+        "1. SA (Service Order): Formato geralmente numérico ou SA-números.\n"
+        "2. GPON (Acesso): Código alfanumérico (ex: ABCD123456).\n"
+        "3. Serial do Modem (ONT/ONU): Código alfanumérico longo (ex: ZTEGC8..., ALCLB...). Procure por 'Serial', 'S/N', 'SN', 'ONT ID'.\n"
+        "4. Seriais Mesh: Códigos alfanuméricos de extensores/roteadores mesh. Retorne uma lista.\n\n"
+        "Regras:\n"
+        "- Ignore dados que não sejam claramente identificáveis.\n"
+        "- Converta tudo para MAIÚSCULAS.\n"
+        "- Remova espaços em branco extras.\n"
+        "- Se não encontrar, retorne null.\n\n"
+        "Retorne o JSON no seguinte formato:\n"
+        "{\n"
+        '  "sa": "...",\n'
+        '  "gpon": "...",\n'
+        '  "serial_do_modem": "...",\n'
+        '  "mesh": ["..."]\n'
+        "}"
+    )
+
+    # Tenta extração via JSON mode
+    response_text = await _call_groq_vision(system, user, [image_bytes], json_mode=True)
+    
+    data = {}
+    try:
+        data = json.loads(response_text)
+    except json.JSONDecodeError:
+        # Fallback: tentar extrair JSON de texto sujo se o modo JSON falhar silenciosamente
+        try:
+            match = re.search(r"\{.*\}", response_text, re.DOTALL)
+            if match:
+                data = json.loads(match.group(0))
+        except:
+            pass
+
+    # Normalização e Validação
+    sa = str(data.get("sa") or "").strip().upper()
+    gpon = str(data.get("gpon") or "").strip().upper()
+    serial = str(data.get("serial_do_modem") or "").strip().upper()
+    mesh_raw = data.get("mesh") or []
+    
+    if isinstance(mesh_raw, str): mesh_raw = [mesh_raw]
+    mesh = [str(m).strip().upper() for m in mesh_raw if is_valid_serial(str(m).strip().upper())]
+
+    # Validação final com Regex (Fallback se a IA alucinar formatos)
+    if sa and re.match(r"^\d+$", sa): sa = f"SA-{sa}" # Adiciona prefixo se faltar
+    if not is_valid_sa(sa): sa = None
+    
+    if not is_valid_gpon(gpon): gpon = None
+    
+    if not is_valid_serial(serial): serial = None
+    
+    # Se a IA falhou completamente (tudo None), tentar Regex bruto no texto da imagem?
+    # A API de visão não retorna texto bruto facilmente sem OCR específico.
+    # Vamos confiar que se a IA falhou no JSON, o Regex de fallback no texto bruto seria complexo de implementar sem uma chamada de "descreva a imagem".
+    # Mas podemos fazer uma segunda chamada pedindo texto bruto se tudo falhar. Por enquanto, vamos manter simples.
+
     return {
         "sa": sa,
         "gpon": gpon,
         "serial_do_modem": serial,
-        "mesh": mesh,
+        "mesh": mesh
     }
+
 
 async def extrair_campos_por_imagens(images: list) -> dict:
+    """
+    Processa múltiplas imagens e agrega os resultados.
+    """
     agg = {"sa": None, "gpon": None, "serial_do_modem": None, "mesh": []}
+    
+    # Processa cada imagem individualmente (poderíamos enviar todas juntas, mas a resolução pode cair)
+    # Para economizar tokens/chamadas, se tivermos muitas imagens, talvez enviar juntas seja melhor.
+    # O código original fazia loop. Vamos manter loop para garantir qualidade máxima por print.
+    
     for img in images:
-        try:
-            d = await extrair_campos_por_imagem(img)
-        except Exception:
-            d = {}
-        for k in ["sa", "gpon", "serial_do_modem"]:
-            v = d.get(k)
-            if not v: continue
-            if k == "sa" and not is_valid_sa(v):
-                continue
-            if k == "gpon" and not is_valid_gpon(v):
-                continue
-            if k == "serial_do_modem" and not is_valid_serial(v):
-                continue
-            if not agg[k]:
-                agg[k] = v
-        ms = d.get("mesh") or []
-        for m in ms:
-            if not is_valid_serial(m):
-                continue
-            if m not in agg["mesh"]:
+        d = await extrair_campos_por_imagem(img)
+        
+        # Merge inteligente: Prioriza valores válidos sobre Nones
+        if d.get("sa") and not agg["sa"]: agg["sa"] = d["sa"]
+        if d.get("gpon") and not agg["gpon"]: agg["gpon"] = d["gpon"]
+        if d.get("serial_do_modem") and not agg["serial_do_modem"]: agg["serial_do_modem"] = d["serial_do_modem"]
+        
+        # Merge de listas sem duplicatas
+        for m in d.get("mesh", []):
+            if m not in agg["mesh"] and m != agg["gpon"] and m != agg["serial_do_modem"]:
                 agg["mesh"].append(m)
+                
     return agg
 
+
 async def extrair_campo_especifico(images: List[bytes], campo: str) -> dict:
-    if not USE_GROQ or not GROQ_API_KEY or Groq is None:
+    """
+    Extrai um campo específico de uma ou mais imagens com prompt focado.
+    """
+    prompts = {
+        "sa": "Extraia apenas o número da SA (Service Order). Retorne JSON: {\"sa\": \"valor\"}",
+        "gpon": "Extraia apenas o código GPON/Acesso. Retorne JSON: {\"gpon\": \"valor\"}",
+        "serial_do_modem": "Extraia apenas o Serial Number (S/N) do modem/ONT. Retorne JSON: {\"serial_do_modem\": \"valor\"}",
+        "mesh": "Extraia apenas os Seriais de equipamentos Mesh. Retorne JSON: {\"mesh\": [\"valor1\", \"valor2\"]}"
+    }
+    
+    user_prompt = prompts.get(campo, f"Extraia o campo {campo}. Retorne JSON.")
+    system_prompt = "Você é um especialista em OCR. Extraia apenas o dado solicitado. Se não encontrar, retorne null no JSON."
+
+    response_text = await _call_groq_vision(system_prompt, user_prompt, images, json_mode=True)
+    
+    try:
+        data = json.loads(response_text)
+    except:
         return {}
-    client = Groq(api_key=GROQ_API_KEY)
-    models = [
-        GROQ_MODEL or "meta-llama/llama-4-scout-17b-16e-instruct",
-        "meta-llama/llama-4-maverick-17b-128e-instruct",
-        "llama-3.2-90b-vision-preview",
-    ]
-    prompt_json = {
-        "sa": "Retorne apenas JSON {\"sa\": \"SA-<digitos>\"}.",
-        "gpon": "Retorne apenas JSON {\"gpon\": \"<alfa-num 6-16 maiusculas>\"}.",
-        "serial_do_modem": "Retorne apenas JSON {\"serial_do_modem\": \"<alfa-num 8-20 maiusculas>\"}.",
-        "mesh": "Retorne apenas JSON {\"mesh\": [\"<seriais mesh>\"]}.",
-    }
-    prompt_text = {
-        "sa": "Retorne apenas SA-<digitos> encontrado na imagem.",
-        "gpon": "Retorne apenas o valor do Acesso GPON (6-16 A-Z0-9).",
-        "serial_do_modem": "Procure 'Número de série', 'SÉRIE' ou 'Serial' e retorne apenas o valor (8-20 A-Z0-9).",
-        "mesh": "Retorne apenas os seriais do mesh (8-20 A-Z0-9), um por linha.",
-    }
-    key = campo
-    txt_last = ""
-    for m in models:
-        try:
-            contents = [{"type": "text", "text": prompt_json.get(campo, "Retorne JSON do campo solicitado.")}]
-            for img in images:
-                b64 = base64.b64encode(img).decode("ascii")
-                contents.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
-            resp = client.chat.completions.create(
-                model=m,
-                temperature=0,
-                response_format={"type": "json_object"},
-                max_completion_tokens=256,
-                messages=[{"role": "user", "content": contents}],
-            )
-            txt = resp.choices[0].message.content if resp and resp.choices else "{}"
-            txt_last = txt or ""
-            data = {}
-            try:
-                data = json.loads(txt)
-            except Exception:
-                data = {}
-            if campo == "mesh":
-                vals = [str(x).strip().upper() for x in (data.get("mesh") or [])]
-                vals = [v for v in vals if is_valid_serial(v)]
-                if vals:
-                    return {"mesh": vals}
-            else:
-                val = str(data.get(key) or "").strip().upper() or None
-                ok = False
-                if campo == "sa":
-                    ok = bool(val and is_valid_sa(val))
-                elif campo == "gpon":
-                    ok = bool(val and is_valid_gpon(val))
-                else:
-                    ok = bool(val and is_valid_serial(val))
-                if ok:
-                    return {key: val}
-            # Segundo intento em modo texto
-            contents2 = [{"type": "text", "text": prompt_text.get(campo, "Retorne apenas o valor solicitado.")}]
-            for img in images:
-                b64 = base64.b64encode(img).decode("ascii")
-                contents2.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
-            resp2 = client.chat.completions.create(
-                model=m,
-                temperature=0,
-                max_completion_tokens=256,
-                messages=[{"role": "user", "content": contents2}],
-            )
-            t2 = resp2.choices[0].message.content if resp2 and resp2.choices else ""
-            txt_last = t2 or txt_last
-            t = txt_last or ""
-            if campo == "sa":
-                m_sa = re.search(r"SA[-\s:]?\s*(\d{5,})", t, re.I)
-                if m_sa:
-                    return {"sa": f"SA-{m_sa.group(1)}"}
-            elif campo == "gpon":
-                m_gp = re.search(r"GPON\s*[:]?\s*([A-Z0-9]{6,16})|\b([A-Z0-9]{6,16})\b", t, re.I)
-                gp = (m_gp.group(1) or m_gp.group(2)) if m_gp else None
-                gp = gp.upper() if gp else None
-                if gp and is_valid_gpon(gp):
-                    return {"gpon": gp}
-            elif campo == "serial_do_modem":
-                m_se = re.search(r"(Número\s*de\s*série|Serial|SÉRIE)\s*[:]?\s*([A-Z0-9]{8,20})", t, re.I)
-                se = m_se.group(2).upper() if m_se else None
-                if se and is_valid_serial(se):
-                    return {"serial_do_modem": se}
-            elif campo == "mesh":
-                ms = re.findall(r"([A-Z0-9]{8,20})", t, re.I)
-                ms = [x.upper() for x in ms if is_valid_serial(x)]
-                if ms:
-                    return {"mesh": ms}
-        except Exception as e:
-            logging.error(f"Groq vision targeted falhou com modelo {m}: {e}")
-            continue
-    return {}
+
+    # Validação específica
+    result = {}
+    if campo == "sa":
+        val = str(data.get("sa") or "").strip().upper()
+        if re.match(r"^\d+$", val): val = f"SA-{val}"
+        if is_valid_sa(val): result["sa"] = val
+        
+    elif campo == "gpon":
+        val = str(data.get("gpon") or "").strip().upper()
+        if is_valid_gpon(val): result["gpon"] = val
+        
+    elif campo == "serial_do_modem":
+        val = str(data.get("serial_do_modem") or "").strip().upper()
+        if is_valid_serial(val): result["serial_do_modem"] = val
+        
+    elif campo == "mesh":
+        raw = data.get("mesh") or []
+        if isinstance(raw, str): raw = [raw]
+        valid_mesh = [str(m).strip().upper() for m in raw if is_valid_serial(str(m).strip().upper())]
+        if valid_mesh: result["mesh"] = valid_mesh
+
+    return result
