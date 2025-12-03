@@ -119,10 +119,13 @@ def main():
             AGUARDANDO_CONFIRMACAO_BROADCAST: [CallbackQueryHandler(confirmar_broadcast)],
             
             # Admin Enquete
-            AGUARDANDO_ENQUETE: [MessageHandler(filters.POLL, admin_poll_handler)],
+            AGUARDANDO_ENQUETE: [MessageHandler(filters.ALL, admin_poll_handler)],
             AGUARDANDO_CONFIRMACAO_ENQUETE: [CallbackQueryHandler(confirmar_enquete)]
         },
-        fallbacks=[CommandHandler('cancelar', cancelar)],
+        fallbacks=[
+            CommandHandler('cancelar', cancelar),
+            CallbackQueryHandler(admin_callback_handler, pattern='^admin_')
+        ],
         per_message=False
     )
 
@@ -134,9 +137,6 @@ def main():
     app.add_handler(CommandHandler('semanal', comando_semanal))
     app.add_handler(CommandHandler('hoje', comando_hoje))
     app.add_handler(CommandHandler('reparo', comando_reparo))
-    
-    # Handlers de Admin (Callbacks)
-    app.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
     
     # Conversation Handler (deve vir por último para pegar os callbacks genéricos se não for admin)
     app.add_handler(conv_handler)

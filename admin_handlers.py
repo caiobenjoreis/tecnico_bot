@@ -195,8 +195,10 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         
     elif query.data == 'admin_exit':
         await query.delete_message()
+        return ConversationHandler.END
         
-    return None
+    # Para outros callbacks admin que não transitam estado
+    return ConversationHandler.END
 
 async def admin_broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Recebe a mensagem broadcast e mostra preview com opções"""
