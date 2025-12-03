@@ -137,7 +137,8 @@ def main():
     keep_alive()
 
     logger.info("🤖 Bot iniciado!")
-    app.run_polling()
+    # drop_pending_updates=True limpa atualizações antigas e evita conflitos
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
