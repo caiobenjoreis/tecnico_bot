@@ -223,17 +223,23 @@ async def extrair_campo_especifico(images: List[bytes], campo: str) -> dict:
         "meta-llama/llama-4-maverick-17b-128e-instruct",
         "llama-3.2-90b-vision-preview",
     ]
-    prompt_map = {
-        "sa": "Retorne JSON {\"sa\": \"SA-<digitos>\"} apenas.",
-        "gpon": "Retorne JSON {\"gpon\": \"<alfa-num 6-16 maiusculas>\"} apenas.",
-        "serial_do_modem": "Retorne JSON {\"serial_do_modem\": \"<alfa-num 8-20 maiusculas>\"} apenas.",
-        "mesh": "Retorne JSON {\"mesh\": [\"<seriais mesh>\"]} apenas.",
+    prompt_json = {
+        "sa": "Retorne apenas JSON {\"sa\": \"SA-<digitos>\"}.",
+        "gpon": "Retorne apenas JSON {\"gpon\": \"<alfa-num 6-16 maiusculas>\"}.",
+        "serial_do_modem": "Retorne apenas JSON {\"serial_do_modem\": \"<alfa-num 8-20 maiusculas>\"}.",
+        "mesh": "Retorne apenas JSON {\"mesh\": [\"<seriais mesh>\"]}.",
     }
+    prompt_text = {
+        "sa": "Retorne apenas SA-<digitos> encontrado na imagem.",
+        "gpon": "Retorne apenas o valor do Acesso GPON (6-16 A-Z0-9).",
+        "serial_do_modem": "Procure 'Número de série', 'SÉRIE' ou 'Serial' e retorne apenas o valor (8-20 A-Z0-9).",
+        "mesh": "Retorne apenas os seriais do mesh (8-20 A-Z0-9), um por linha.",
+    }
+    key = campo
     txt_last = ""
     for m in models:
         try:
-            contents = []
-            contents.append({"type": "text", "text": prompt_map.get(campo, "Retorne JSON do campo solicitado.")})
+            contents = [{"type": "text", "text": prompt_json.get(campo, "Retorne JSON do campo solicitado.")}]
             for img in images:
                 b64 = base64.b64encode(img).decode("ascii")
                 contents.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
@@ -246,29 +252,62 @@ async def extrair_campo_especifico(images: List[bytes], campo: str) -> dict:
             )
             txt = resp.choices[0].message.content if resp and resp.choices else "{}"
             txt_last = txt or ""
+            data = {}
             try:
                 data = json.loads(txt)
-                return data
             except Exception:
-                continue
+                data = {}
+            if campo == "mesh":
+                vals = [str(x).strip().upper() for x in (data.get("mesh") or [])]
+                vals = [v for v in vals if is_valid_serial(v)]
+                if vals:
+                    return {"mesh": vals}
+            else:
+                val = str(data.get(key) or "").strip().upper() or None
+                ok = False
+                if campo == "sa":
+                    ok = bool(val and is_valid_sa(val))
+                elif campo == "gpon":
+                    ok = bool(val and is_valid_gpon(val))
+                else:
+                    ok = bool(val and is_valid_serial(val))
+                if ok:
+                    return {key: val}
+            # Segundo intento em modo texto
+            contents2 = [{"type": "text", "text": prompt_text.get(campo, "Retorne apenas o valor solicitado.")}]
+            for img in images:
+                b64 = base64.b64encode(img).decode("ascii")
+                contents2.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+            resp2 = client.chat.completions.create(
+                model=m,
+                temperature=0,
+                max_completion_tokens=256,
+                messages=[{"role": "user", "content": contents2}],
+            )
+            t2 = resp2.choices[0].message.content if resp2 and resp2.choices else ""
+            txt_last = t2 or txt_last
+            t = txt_last or ""
+            if campo == "sa":
+                m_sa = re.search(r"SA[-\s:]?\s*(\d{5,})", t, re.I)
+                if m_sa:
+                    return {"sa": f"SA-{m_sa.group(1)}"}
+            elif campo == "gpon":
+                m_gp = re.search(r"GPON\s*[:]?\s*([A-Z0-9]{6,16})|\b([A-Z0-9]{6,16})\b", t, re.I)
+                gp = (m_gp.group(1) or m_gp.group(2)) if m_gp else None
+                gp = gp.upper() if gp else None
+                if gp and is_valid_gpon(gp):
+                    return {"gpon": gp}
+            elif campo == "serial_do_modem":
+                m_se = re.search(r"(Número\s*de\s*série|Serial|SÉRIE)\s*[:]?\s*([A-Z0-9]{8,20})", t, re.I)
+                se = m_se.group(2).upper() if m_se else None
+                if se and is_valid_serial(se):
+                    return {"serial_do_modem": se}
+            elif campo == "mesh":
+                ms = re.findall(r"([A-Z0-9]{8,20})", t, re.I)
+                ms = [x.upper() for x in ms if is_valid_serial(x)]
+                if ms:
+                    return {"mesh": ms}
         except Exception as e:
             logging.error(f"Groq vision targeted falhou com modelo {m}: {e}")
             continue
-    # Fallback de regex com base no texto retornado
-    try:
-        t = txt_last or ""
-        if campo == "sa":
-            m_sa = re.search(r"SA[-\s:]?\s*(\d{5,})", t, re.I)
-            return {"sa": (f"SA-{m_sa.group(1)}" if m_sa else None)}
-        if campo == "gpon":
-            m_gp = re.search(r"Acesso\s*GPON\s*[:]?\s*([A-Z0-9]{6,16})", t, re.I)
-            return {"gpon": (m_gp.group(1).upper() if m_gp else None)}
-        if campo == "serial_do_modem":
-            m_se = re.search(r"(Número\s*de\s*série|Serial|SÉRIE)\s*[:]?\s*([A-Z0-9]{8,20})", t, re.I)
-            return {"serial_do_modem": (m_se.group(2).upper() if m_se else None)}
-        if campo == "mesh":
-            ms = re.findall(r"MESH[^\n]*?([A-Z0-9]{8,20})", t, re.I)
-            return {"mesh": [m.upper() for m in ms]}
-    except Exception:
-        pass
     return {}
