@@ -1,13 +1,16 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
-from config import ADMIN_IDS, AGUARDANDO_BROADCAST, AGUARDANDO_CONFIRMACAO_BROADCAST, AGUARDANDO_ENQUETE, AGUARDANDO_CONFIRMACAO_ENQUETE, TZ
+from config import ADMIN_IDS, TZ
 from database import db
 from datetime import datetime
 import io
 import csv
 import asyncio
-from telegram.error import RetryAfter
+from telegram.error import RetryAfter, Forbidden
 from collections import defaultdict
+import logging
+
+logger = logging.getLogger(__name__)
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
@@ -41,7 +44,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     
     if not is_admin(user_id):
         await query.answer('❌ Acesso negado', show_alert=True)
-        return ConversationHandler.END
+        return
         
     await query.answer()
     
@@ -145,7 +148,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         
     elif query.data == 'admin_all_installs':
         insts = await db.get_installations(limit=20)
-        insts.reverse()  # Mais recentes primeiro
+        insts.reverse()
         
         msg = f'📋 *Últimas Instalações ({len(insts)})*\n\n'
         for inst in insts:
@@ -181,178 +184,285 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
         
     elif query.data == 'admin_poll':
+        keyboard = [
+            [InlineKeyboardButton("📊 Enquete Simples", callback_data='poll_type_regular')],
+            [InlineKeyboardButton("🎯 Quiz (com resposta correta)", callback_data='poll_type_quiz')],
+            [InlineKeyboardButton("🔙 Voltar", callback_data='admin_exit')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
-            '📊 *Nova Enquete*\n\n'
-            'Crie a enquete aqui no chat (use o anexo do Telegram > Enquete) e envie para mim.\n'
-            'Eu irei repassá-la para todos os técnicos.',
+            '📊 *Criar Enquete*\n\n'
+            'Escolha o tipo de enquete:\n\n'
+            '• *Enquete Simples*: Votação normal\n'
+            '• *Quiz*: Com resposta correta e explicação',
+            reply_markup=reply_markup,
             parse_mode='Markdown'
         )
-        return AGUARDANDO_ENQUETE
+        
+    elif query.data == 'poll_type_regular':
+        context.user_data['poll_type'] = 'regular'
+        context.user_data['waiting_poll'] = True
+        await query.edit_message_text(
+            '📊 *Enquete Simples*\n\n'
+            'Crie a enquete usando o anexo do Telegram (📎 > Enquete).\n\n'
+            '💡 *Dicas:*\n'
+            '• Você pode adicionar até 10 opções\n'
+            '• Marque "Múltiplas respostas" se quiser permitir mais de uma escolha\n'
+            '• Marque "Anônima" para ocultar quem votou',
+            parse_mode='Markdown'
+        )
+        
+    elif query.data == 'poll_type_quiz':
+        context.user_data['poll_type'] = 'quiz'
+        context.user_data['waiting_poll'] = True
+        await query.edit_message_text(
+            '🎯 *Quiz*\n\n'
+            'Crie o quiz usando o anexo do Telegram (📎 > Enquete).\n\n'
+            '⚠️ *IMPORTANTE:*\n'
+            '• Ative o modo "Quiz"\n'
+            '• Selecione a resposta correta\n'
+            '• Adicione uma explicação (opcional)\n\n'
+            '🏆 O bot mostrará quem acertou!',
+            parse_mode='Markdown'
+        )
 
     elif query.data == 'admin_broadcast':
+        context.user_data['waiting_broadcast'] = True
         await query.edit_message_text('📢 Envie a mensagem para todos (Texto, Foto ou Vídeo):')
-        return AGUARDANDO_BROADCAST
         
-    elif query.data == 'admin_exit':
-        await query.delete_message()
-        
-    return None
-
-async def admin_broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Recebe a mensagem broadcast e mostra preview com opções"""
-    user_id = update.message.from_user.id
-    
-    if not is_admin(user_id):
-        await update.message.reply_text('❌ Acesso negado.')
-        return ConversationHandler.END
-    
-    # Detectar tipo de mensagem
-    broadcast_data = {}
-    
-    if update.message.photo:
-        broadcast_data['type'] = 'photo'
-        broadcast_data['file_id'] = update.message.photo[-1].file_id
-        broadcast_data['caption'] = update.message.caption or ''
-        preview_type = '📷 Foto'
-    elif update.message.video:
-        broadcast_data['type'] = 'video'
-        broadcast_data['file_id'] = update.message.video.file_id
-        broadcast_data['caption'] = update.message.caption or ''
-        preview_type = '🎥 Vídeo'
-    elif update.message.document:
-        broadcast_data['type'] = 'document'
-        broadcast_data['file_id'] = update.message.document.file_id
-        broadcast_data['caption'] = update.message.caption or ''
-        preview_type = '📄 Documento'
-    elif update.message.text:
-        broadcast_data['type'] = 'text'
-        broadcast_data['text'] = update.message.text.strip()
-        preview_type = '📝 Texto'
-    else:
-        await update.message.reply_text('❌ Tipo não suportado.')
-        return AGUARDANDO_BROADCAST
-    
-    # Armazenar no contexto
-    context.user_data['broadcast_data'] = broadcast_data
-    
-    # Preview
-    users = await db.get_all_users()
-    total = len(users)
-    
-    if broadcast_data['type'] == 'text':
-        preview = broadcast_data['text'][:200]
-        if len(broadcast_data['text']) > 200:
-            preview += '...'
-    else:
-        preview = broadcast_data.get('caption', '(sem legenda)')[:200]
-    
-    msg = (
-        f'📋 *Preview da Mensagem*\n\n'
-        f'Tipo: {preview_type}\n'
-        f'Destinatários: {total} técnicos\n\n'
-        f'*Conteúdo:*\n{preview}\n\n'
-        f'Escolha uma opção:'
-    )
-    
-    keyboard = [
-        [InlineKeyboardButton("✅ Enviar para TODOS", callback_data='broadcast_send_all')],
-        [InlineKeyboardButton("🎯 Selecionar Região", callback_data='broadcast_select_region')],
-        [InlineKeyboardButton("❌ Cancelar", callback_data='broadcast_cancel')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
-    return AGUARDANDO_CONFIRMACAO_BROADCAST
-
-async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Executa o broadcast após confirmação"""
-    query = update.callback_query
-    user_id = query.from_user.id
-    
-    if not is_admin(user_id):
-        await query.answer('❌ Acesso negado', show_alert=True)
-        return ConversationHandler.END
-    
-    await query.answer()
-    
-    if query.data == 'broadcast_cancel':
+    elif query.data == 'broadcast_cancel':
+        context.user_data.clear()
         await query.edit_message_text('❌ Broadcast cancelado.')
-        context.user_data.pop('broadcast_data', None)
-        return ConversationHandler.END
         
-    if query.data == 'broadcast_select_region':
-        # Listar regiões disponíveis
+    elif query.data == 'broadcast_send_all':
+        await enviar_broadcast(update, context, None)
+        
+    elif query.data == 'broadcast_select_region':
         users = await db.get_all_users()
         regioes = set()
         for u in users.values():
             r = u.get('regiao')
-            if r: regioes.add(r)
-            
+            if r:
+                regioes.add(r)
+                
         if not regioes:
             await query.edit_message_text('❌ Nenhuma região encontrada.')
-            return ConversationHandler.END
+            return
             
         keyboard = []
         for reg in sorted(regioes):
             keyboard.append([InlineKeyboardButton(f"📍 {reg}", callback_data=f'broadcast_region_{reg}')])
-        keyboard.append([InlineKeyboardButton("🔙 Voltar", callback_data='broadcast_back')])
+        keyboard.append([InlineKeyboardButton("🔙 Cancelar", callback_data='broadcast_cancel')])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text('🎯 Selecione a região alvo:', reply_markup=reply_markup)
-        return AGUARDANDO_CONFIRMACAO_BROADCAST
-
-    if query.data == 'broadcast_back':
-        # Volta para o preview
-        # (Simplificado: apenas pede para reenviar ou cancela, mas idealmente reconstruiria o preview.
-        #  Para economizar código, vamos cancelar e pedir para reenviar ou apenas editar texto)
-        await query.edit_message_text('🔙 Operação cancelada. Envie o comando novamente.')
-        return ConversationHandler.END
-
-    # Definir alvos
-    users = await db.get_all_users()
-    target_users = []
-    
-    if query.data == 'broadcast_send_all' or query.data == 'broadcast_send_pin': # Mantendo compatibilidade com pin se quiser reativar
-        target_users = list(users.keys())
-        pin_message = (query.data == 'broadcast_send_pin')
+        
     elif query.data.startswith('broadcast_region_'):
         region = query.data.replace('broadcast_region_', '')
-        target_users = [uid for uid, u in users.items() if u.get('regiao') == region]
-        pin_message = False
-    else:
-        # Fallback
-        target_users = list(users.keys())
-        pin_message = False
+        await enviar_broadcast(update, context, region)
+        
+    elif query.data == 'poll_cancel':
+        context.user_data.clear()
+        await query.edit_message_text('❌ Enquete cancelada.')
+        
+    elif query.data == 'poll_send_all':
+        await enviar_enquete(update, context, None)
+        
+    elif query.data == 'poll_select_region':
+        users = await db.get_all_users()
+        regioes = set()
+        for u in users.values():
+            r = u.get('regiao')
+            if r:
+                regioes.add(r)
+                
+        if not regioes:
+            await query.edit_message_text('❌ Nenhuma região encontrada.')
+            return
+            
+        keyboard = []
+        for reg in sorted(regioes):
+            keyboard.append([InlineKeyboardButton(f"📍 {reg}", callback_data=f'poll_region_{reg}')])
+        keyboard.append([InlineKeyboardButton("🔙 Cancelar", callback_data='poll_cancel')])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text('🎯 Selecione a região alvo:', reply_markup=reply_markup)
+        
+    elif query.data.startswith('poll_region_'):
+        region = query.data.replace('poll_region_', '')
+        await enviar_enquete(update, context, region)
+        
+    elif query.data == 'admin_exit':
+        await query.delete_message()
+
+async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler unificado para mensagens do admin"""
+    user_id = update.message.from_user.id
     
+    if not is_admin(user_id):
+        return
+    
+    # Broadcast
+    if context.user_data.get('waiting_broadcast'):
+        context.user_data['waiting_broadcast'] = False
+        
+        broadcast_data = {}
+        
+        if update.message.photo:
+            broadcast_data['type'] = 'photo'
+            broadcast_data['file_id'] = update.message.photo[-1].file_id
+            broadcast_data['caption'] = update.message.caption or ''
+            preview_type = '📷 Foto'
+        elif update.message.video:
+            broadcast_data['type'] = 'video'
+            broadcast_data['file_id'] = update.message.video.file_id
+            broadcast_data['caption'] = update.message.caption or ''
+            preview_type = '🎥 Vídeo'
+        elif update.message.document:
+            broadcast_data['type'] = 'document'
+            broadcast_data['file_id'] = update.message.document.file_id
+            broadcast_data['caption'] = update.message.caption or ''
+            preview_type = '📄 Documento'
+        elif update.message.text:
+            broadcast_data['type'] = 'text'
+            broadcast_data['text'] = update.message.text.strip()
+            preview_type = '📝 Texto'
+        else:
+            await update.message.reply_text('❌ Tipo não suportado.')
+            return
+        
+        context.user_data['broadcast_data'] = broadcast_data
+        
+        users = await db.get_all_users()
+        total = len(users)
+        
+        if broadcast_data['type'] == 'text':
+            preview = broadcast_data['text'][:200]
+            if len(broadcast_data['text']) > 200:
+                preview += '...'
+        else:
+            preview = broadcast_data.get('caption', '(sem legenda)')[:200]
+        
+        msg = (
+            f'📋 *Preview da Mensagem*\n\n'
+            f'Tipo: {preview_type}\n'
+            f'Destinatários: {total} técnicos\n\n'
+            f'*Conteúdo:*\n{preview}\n\n'
+            f'Escolha uma opção:'
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Enviar para TODOS", callback_data='broadcast_send_all')],
+            [InlineKeyboardButton("🎯 Selecionar Região", callback_data='broadcast_select_region')],
+            [InlineKeyboardButton("❌ Cancelar", callback_data='broadcast_cancel')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+        return
+    
+    # Enquete
+    if context.user_data.get('waiting_poll'):
+        context.user_data['waiting_poll'] = False
+        
+        if not update.message.poll:
+            await update.message.reply_text('❌ Por favor, envie uma ENQUETE válida.')
+            return
+            
+        poll = update.message.poll
+        poll_type = context.user_data.get('poll_type', 'regular')
+        
+        # Validar se é quiz quando deveria ser
+        if poll_type == 'quiz' and poll.type != 'quiz':
+            await update.message.reply_text(
+                '❌ Você escolheu criar um Quiz, mas enviou uma enquete normal.\n\n'
+                'Por favor, ao criar a enquete, ative o modo "Quiz" e selecione a resposta correta.',
+                parse_mode='Markdown'
+            )
+            context.user_data['waiting_poll'] = True
+            return
+        
+        context.user_data['poll_data'] = {
+            'question': poll.question,
+            'options': [o.text for o in poll.options],
+            'is_anonymous': poll.is_anonymous,
+            'allows_multiple_answers': poll.allows_multiple_answers,
+            'type': poll.type,
+            'correct_option_id': poll.correct_option_id if poll.type == 'quiz' else None,
+            'explanation': poll.explanation if poll.type == 'quiz' else None
+        }
+        
+        users = await db.get_all_users()
+        
+        # Detectar tipo de enquete
+        if poll.type == 'quiz':
+            tipo_emoji = '🎯'
+            tipo_nome = 'Quiz'
+            correct_answer = poll.options[poll.correct_option_id].text if poll.correct_option_id is not None else 'N/A'
+            extra_info = f'✅ Resposta correta: {correct_answer}\n'
+            if poll.explanation:
+                extra_info += f'� Explicação: {poll.explanation}\n'
+        else:
+            tipo_emoji = '�📊'
+            tipo_nome = 'Enquete'
+            extra_info = ''
+        
+        msg = (
+            f'{tipo_emoji} *Confirmar {tipo_nome}*\n\n'
+            f'❓ Pergunta: {poll.question}\n'
+            f'🔢 Opções: {len(poll.options)}\n'
+            f'{extra_info}'
+            f'👥 Destinatários: {len(users)} técnicos\n\n'
+            'Escolha uma opção:'
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Enviar para TODOS", callback_data='poll_send_all')],
+            [InlineKeyboardButton("🎯 Selecionar Região", callback_data='poll_select_region')],
+            [InlineKeyboardButton("❌ Cancelar", callback_data='poll_cancel')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def enviar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE, region: str = None):
+    """Envia broadcast para todos ou região específica"""
+    query = update.callback_query
     broadcast_data = context.user_data.get('broadcast_data')
     
     if not broadcast_data:
         await query.edit_message_text('❌ Erro: dados não encontrados.')
-        return ConversationHandler.END
+        return
     
-    await query.edit_message_text(f'📤 Enviando para {len(target_users)} técnicos...')
+    users = await db.get_all_users()
+    
+    if region:
+        target_users = [uid for uid, u in users.items() if u.get('regiao') == region]
+        msg_region = f' na região {region}'
+    else:
+        target_users = list(users.keys())
+        msg_region = ''
+    
+    await query.edit_message_text(f'📤 Enviando para {len(target_users)} técnicos{msg_region}...')
     
     header = '📢 *AVISO DA ADMINISTRAÇÃO*\n━━━━━━━━━━━━━━━━━━━━\n\n'
     footer = '\n\n━━━━━━━━━━━━━━━━━━━━'
     
     enviados = 0
     falhas = 0
-    fixados = 0
     
     for uid in target_users:
         try:
-            message_sent = None
-            
             if broadcast_data['type'] == 'text':
                 msg = header + broadcast_data['text'] + footer
-                message_sent = await context.bot.send_message(
+                await context.bot.send_message(
                     chat_id=int(uid),
                     text=msg,
                     parse_mode='Markdown'
                 )
             elif broadcast_data['type'] == 'photo':
                 caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
-                message_sent = await context.bot.send_photo(
+                await context.bot.send_photo(
                     chat_id=int(uid),
                     photo=broadcast_data['file_id'],
                     caption=caption,
@@ -360,7 +470,7 @@ async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE
                 )
             elif broadcast_data['type'] == 'video':
                 caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
-                message_sent = await context.bot.send_video(
+                await context.bot.send_video(
                     chat_id=int(uid),
                     video=broadcast_data['file_id'],
                     caption=caption,
@@ -368,7 +478,7 @@ async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE
                 )
             elif broadcast_data['type'] == 'document':
                 caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
-                message_sent = await context.bot.send_document(
+                await context.bot.send_document(
                     chat_id=int(uid),
                     document=broadcast_data['file_id'],
                     caption=caption,
@@ -376,33 +486,22 @@ async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE
                 )
             
             enviados += 1
+            await asyncio.sleep(0.05)
             
-            if pin_message and message_sent:
-                try:
-                    await context.bot.pin_chat_message(
-                        chat_id=int(uid),
-                        message_id=message_sent.message_id,
-                        disable_notification=True
-                    )
-                    fixados += 1
-                except:
-                    pass
         except RetryAfter as e:
             await asyncio.sleep(e.retry_after)
-            # Tentar novamente após o tempo de espera
             try:
                 if broadcast_data['type'] == 'text':
                     msg = header + broadcast_data['text'] + footer
                     await context.bot.send_message(chat_id=int(uid), text=msg, parse_mode='Markdown')
-                # (Simplificação: apenas re-tenta texto ou ignora mídia complexa no retry para não duplicar código excessivamente aqui)
                 enviados += 1
             except:
                 falhas += 1
-        except Exception as e:
+        except Forbidden:
             falhas += 1
-        
-        # Pequeno delay para evitar flood
-        await asyncio.sleep(0.05)
+        except Exception as e:
+            logger.error(f"Erro ao enviar para {uid}: {e}")
+            falhas += 1
     
     relatorio = (
         f'✅ *Broadcast Concluído!*\n\n'
@@ -412,107 +511,78 @@ async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE
         f'👥 Total Alvo: {len(target_users)}\n'
     )
     
-    if pin_message:
-        relatorio += f'📌 Fixadas: {fixados}\n'
-    
     await query.edit_message_text(relatorio, parse_mode='Markdown')
-    context.user_data.pop('broadcast_data', None)
-    return ConversationHandler.END
+    context.user_data.clear()
 
-async def admin_poll_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Recebe a enquete criada pelo admin"""
-    user_id = update.message.from_user.id
-    if not is_admin(user_id):
-        return ConversationHandler.END
-        
-    if not update.message.poll:
-        await update.message.reply_text('❌ Por favor, envie uma ENQUETE válida (use o menu de anexos do Telegram).')
-        return AGUARDANDO_ENQUETE
-        
-    poll = update.message.poll
-    
-    # Salvar dados da enquete para broadcast
-    context.user_data['poll_data'] = {
-        'question': poll.question,
-        'options': [o.text for o in poll.options],
-        'is_anonymous': poll.is_anonymous,
-        'allows_multiple_answers': poll.allows_multiple_answers,
-        'type': poll.type
-    }
-    
-    users = await db.get_all_users()
-    
-    msg = (
-        '📊 *Confirmar Enquete*\n\n'
-        f'❓ Pergunta: {poll.question}\n'
-        f'🔢 Opções: {len(poll.options)}\n'
-        f'👥 Destinatários: {len(users)} técnicos\n\n'
-        'Deseja enviar agora?'
-    )
-    
-    keyboard = [
-        [InlineKeyboardButton("✅ Enviar Enquete", callback_data='poll_send')],
-        [InlineKeyboardButton("❌ Cancelar", callback_data='poll_cancel')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
-    return AGUARDANDO_CONFIRMACAO_ENQUETE
-
-async def confirmar_enquete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def enviar_enquete(update: Update, context: ContextTypes.DEFAULT_TYPE, region: str = None):
+    """Envia enquete para todos ou região específica"""
     query = update.callback_query
-    await query.answer()
-    
-    if query.data == 'poll_cancel':
-        await query.edit_message_text('❌ Enquete cancelada.')
-        context.user_data.pop('poll_data', None)
-        return ConversationHandler.END
-        
     poll_data = context.user_data.get('poll_data')
+    
     if not poll_data:
         await query.edit_message_text('❌ Erro: dados da enquete perdidos.')
-        return ConversationHandler.END
+        return
         
     users = await db.get_all_users()
-    await query.edit_message_text('📤 Enviando enquete...')
+    
+    if region:
+        target_users = [uid for uid, u in users.items() if u.get('regiao') == region]
+        msg_region = f' na região {region}'
+    else:
+        target_users = list(users.keys())
+        msg_region = ''
+    
+    tipo_emoji = '🎯' if poll_data['type'] == 'quiz' else '📊'
+    await query.edit_message_text(f'{tipo_emoji} Enviando para {len(target_users)} técnicos{msg_region}...')
     
     enviados = 0
     falhas = 0
     
-    for uid in users.keys():
+    for uid in target_users:
         try:
-            await context.bot.send_poll(
-                chat_id=int(uid),
-                question=poll_data['question'],
-                options=poll_data['options'],
-                is_anonymous=poll_data['is_anonymous'],
-                allows_multiple_answers=poll_data['allows_multiple_answers'],
-                type=poll_data['type']
-            )
+            # Preparar kwargs baseado no tipo
+            poll_kwargs = {
+                'chat_id': int(uid),
+                'question': poll_data['question'],
+                'options': poll_data['options'],
+                'is_anonymous': poll_data['is_anonymous'],
+                'type': poll_data['type']
+            }
+            
+            # Adicionar parâmetros específicos de quiz
+            if poll_data['type'] == 'quiz':
+                if poll_data.get('correct_option_id') is not None:
+                    poll_kwargs['correct_option_id'] = poll_data['correct_option_id']
+                if poll_data.get('explanation'):
+                    poll_kwargs['explanation'] = poll_data['explanation']
+            else:
+                # Para enquetes normais
+                poll_kwargs['allows_multiple_answers'] = poll_data.get('allows_multiple_answers', False)
+            
+            await context.bot.send_poll(**poll_kwargs)
             enviados += 1
-            await asyncio.sleep(0.05) # Evitar flood
+            await asyncio.sleep(0.05)
+            
         except RetryAfter as e:
             await asyncio.sleep(e.retry_after)
             try:
-                await context.bot.send_poll(
-                    chat_id=int(uid),
-                    question=poll_data['question'],
-                    options=poll_data['options'],
-                    is_anonymous=poll_data['is_anonymous'],
-                    allows_multiple_answers=poll_data['allows_multiple_answers'],
-                    type=poll_data['type']
-                )
+                await context.bot.send_poll(**poll_kwargs)
                 enviados += 1
             except:
                 falhas += 1
-        except:
+        except Forbidden:
             falhas += 1
-            
+        except Exception as e:
+            logger.error(f"Erro ao enviar enquete para {uid}: {e}")
+            falhas += 1
+    
+    tipo_nome = 'Quiz' if poll_data['type'] == 'quiz' else 'Enquete'
     await query.edit_message_text(
-        f'✅ *Enquete Enviada!*\n\n'
+        f'✅ *{tipo_nome} Enviada!*\n\n'
         f'📤 Enviados: {enviados}\n'
-        f'❌ Falhas: {falhas}',
+        f'❌ Falhas: {falhas}\n'
+        f'👥 Total Alvo: {len(target_users)}',
         parse_mode='Markdown'
     )
-    context.user_data.pop('poll_data', None)
-    return ConversationHandler.END
+    context.user_data.clear()
+

@@ -17,8 +17,7 @@ from handlers import (
     comando_mensal, comando_semanal, comando_hoje, receber_data_inicio, receber_data_fim
 )
 from admin_handlers import (
-    admin_panel, admin_callback_handler, admin_broadcast_handler, confirmar_broadcast,
-    admin_poll_handler, confirmar_enquete
+    admin_panel, admin_callback_handler, handle_admin_message
 )
 
 # Configuração de Logging
@@ -110,17 +109,7 @@ def main():
             
             # Relatório por Período
             AGUARDANDO_DATA_INICIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_data_inicio)],
-            AGUARDANDO_DATA_FIM: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_data_fim)],
-            
-            # Admin Broadcast
-            AGUARDANDO_BROADCAST: [
-                MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL, admin_broadcast_handler)
-            ],
-            AGUARDANDO_CONFIRMACAO_BROADCAST: [CallbackQueryHandler(confirmar_broadcast)],
-            
-            # Admin Enquete
-            AGUARDANDO_ENQUETE: [MessageHandler(filters.POLL, admin_poll_handler)],
-            AGUARDANDO_CONFIRMACAO_ENQUETE: [CallbackQueryHandler(confirmar_enquete)]
+            AGUARDANDO_DATA_FIM: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_data_fim)]
         },
         fallbacks=[CommandHandler('cancelar', cancelar)],
         per_message=False
@@ -135,8 +124,11 @@ def main():
     app.add_handler(CommandHandler('hoje', comando_hoje))
     app.add_handler(CommandHandler('reparo', comando_reparo))
     
-    # Handlers de Admin (Callbacks)
+    # Handlers de Admin (Callbacks e Mensagens)
     app.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
+    app.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^broadcast_'))
+    app.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^poll_'))
+    app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL | filters.POLL, handle_admin_message))
     
     # Conversation Handler (deve vir por último para pegar os callbacks genéricos se não for admin)
     app.add_handler(conv_handler)
