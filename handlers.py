@@ -11,6 +11,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# ==================== CATEGORIZAÇÃO DE TIPOS ====================
+# Tipos que são SEMPRE reparos
+TIPOS_REPARO = ['defeito_banda_larga', 'defeito_linha', 'defeito_tv', 'retirada']
+
+# Tipos que são SEMPRE instalações
+TIPOS_INSTALACAO = ['instalacao', 'instalacao_tv', 'instalacao_mesh']
+
+# Tipos que podem ser ambos (depende do contexto)
+TIPOS_AMBIGUOS = ['mudanca_endereco', 'servicos', 'servico']
+
 # ==================== FLUXO DE INSTALAÇÃO/REPARO ====================
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -19,6 +29,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if query.data == 'registrar':
         context.user_data['modo_registro'] = 'instalacao'
+        logger.info(f"Usuário {query.from_user.id} iniciou INSTALAÇÃO")
         await query.edit_message_text(
             '📝 *Nova Instalação* [Etapa 1/5]\n\n'
             'Digite o *número da SA*:\n'
@@ -30,6 +41,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif query.data == 'registrar_reparo':
         context.user_data['modo_registro'] = 'reparo'
+        logger.info(f"Usuário {query.from_user.id} iniciou REPARO")
         await query.edit_message_text(
             '🛠️ *Novo Reparo* [Etapa 1/5]\n\n'
             'Digite o *número da SA*:\n'
@@ -633,11 +645,27 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tecnico_nome = (f"{user_data.get('nome','')} {user_data.get('sobrenome','')}".strip() if user_data else (update.message.from_user.username or update.message.from_user.first_name))
     tecnico_regiao = (user_data.get('regiao') if user_data else None)
     
+    # Determinar tipo e categoria corretamente
+    tipo = context.user_data.get('tipo') or 'instalacao'
+    modo_registro = context.user_data.get('modo_registro')
+    
+    # Inferir categoria baseada no tipo (mais confiável que modo_registro)
+    if tipo in TIPOS_REPARO:
+        categoria = 'reparo'
+        logger.info(f"Categoria inferida como REPARO (tipo: {tipo})")
+    elif tipo in TIPOS_INSTALACAO:
+        categoria = 'instalacao'
+        logger.info(f"Categoria inferida como INSTALAÇÃO (tipo: {tipo})")
+    else:
+        # Para tipos ambíguos, usar modo_registro se disponível
+        categoria = context.user_data.get('modo_registro') or 'instalacao'
+        logger.info(f"Categoria ambígua (tipo: {tipo}), usando modo_registro: {modo_registro} → categoria: {categoria}")
+    
     nova_instalacao = {
         'sa': context.user_data['sa'],
         'gpon': context.user_data['gpon'],
-        'tipo': context.user_data.get('tipo') or 'instalacao',
-        'categoria': context.user_data.get('modo_registro') or 'instalacao',
+        'tipo': tipo,
+        'categoria': categoria,
         'fotos': context.user_data.get('fotos', []),
         'tecnico_id': user_id,
         'tecnico_nome': tecnico_nome,
@@ -661,6 +689,7 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return text
     
     if ok:
+        logger.info(f"✅ {nova_instalacao['categoria'].upper()} salvo com sucesso - SA: {nova_instalacao['sa']}, Tipo: {nova_instalacao['tipo']}")
         titulo = '✅ *REPARO REGISTRADO*' if nova_instalacao['categoria'] == 'reparo' else '✅ *INSTALAÇÃO REGISTRADA*'
         msg_parts = [
             '━━━━━━━━━━━━━━━━━━━━\n',
@@ -772,6 +801,7 @@ async def comando_consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def comando_reparo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['modo_registro'] = 'reparo'
+    logger.info(f"Usuário {update.message.from_user.id} iniciou REPARO via comando /reparo")
     await update.message.reply_text('🛠️ *Novo Reparo*\nEnvie o *número da SA:*', parse_mode='Markdown')
     return AGUARDANDO_SA
 
