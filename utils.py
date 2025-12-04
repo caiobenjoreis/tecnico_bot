@@ -298,17 +298,18 @@ async def extrair_campo_especifico(images: List[bytes], campo: str) -> dict:
 
     return result
 
-async def extrair_dados_completos(image_bytes: bytes) -> dict:
+async def extrair_dados_completos(images: List[bytes]) -> dict:
     """
-    Extrai todos os dados possíveis de uma imagem para preenchimento de máscaras.
+    Extrai todos os dados possíveis de uma ou mais imagens para preenchimento de máscaras.
     """
     system = (
-        "Você é um assistente de OCR técnico. Extraia o MÁXIMO de informações da tela do aplicativo técnico. "
+        "Você é um assistente de OCR técnico. Extraia o MÁXIMO de informações das telas do aplicativo técnico. "
+        "Combine as informações de todas as imagens para preencher os campos. "
         "Retorne APENAS um JSON válido."
     )
     
     user = (
-        "Analise a imagem e extraia os seguintes dados se disponíveis:\n"
+        "Analise as imagens e extraia os seguintes dados se disponíveis:\n"
         "- sa: Número da SA/Pedido/OS\n"
         "- gpon: Código GPON/Designação\n"
         "- cliente: Nome do cliente\n"
@@ -334,7 +335,7 @@ async def extrair_dados_completos(image_bytes: bytes) -> dict:
         "}"
     )
 
-    response_text = await _call_groq_vision(system, user, [image_bytes], json_mode=True)
+    response_text = await _call_groq_vision(system, user, images, json_mode=True)
     
     try:
         data = json.loads(response_text)

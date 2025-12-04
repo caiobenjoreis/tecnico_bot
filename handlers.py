@@ -238,19 +238,20 @@ async def receber_tipo_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
     
     await query.edit_message_text(
         f'🎭 *Máscara: {tipo}*\n\n'
-        '📸 Envie um *print da tela* do aplicativo com os dados do cliente/serviço para preenchimento automático.\n\n'
-        'Ou clique em *Pular* para receber a máscara em branco.',
+        '📸 Envie os *prints da tela* do aplicativo.\n'
+        '💡 Você pode enviar várias fotos para complementar os dados.\n\n'
+        'Quando terminar, clique em *✅ Gerar Máscara*.',
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
     return AGUARDANDO_FOTO_MASCARA
 
 async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from utils import extrair_dados_completos
+    # Inicializar lista de fotos se não existir
+    if 'fotos_mascara' not in context.user_data:
+        context.user_data['fotos_mascara'] = []
     
-    dados = {}
-    
-    # Se enviou foto
+    # Se enviou foto, acumula
     if update.message and update.message.photo:
         photo = update.message.photo[-1]
         try:
@@ -258,17 +259,47 @@ async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
             out = io.BytesIO()
             await file.download_to_memory(out)
             image_bytes = out.getvalue()
+            context.user_data['fotos_mascara'].append(image_bytes)
             
-            await update.message.reply_text('⏳ Analisando imagem...', parse_mode='Markdown')
-            dados = await extrair_dados_completos(image_bytes)
+            qtd = len(context.user_data['fotos_mascara'])
+            keyboard = [[InlineKeyboardButton("✅ Gerar Máscara", callback_data='gerar_mascara')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                f'📸 *{qtd} foto(s) recebida(s)*\nEnvie mais ou clique em Gerar.',
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+            return AGUARDANDO_FOTO_MASCARA
         except Exception as e:
-            logger.error(f"Erro ao processar foto mascara: {e}")
-            await update.message.reply_text('❌ Erro ao processar imagem. Gerando máscara em branco.')
-    
-    # Se pulou (callback)
-    elif update.callback_query and update.callback_query.data == 'skip_photo':
+            logger.error(f"Erro ao baixar foto mascara: {e}")
+            await update.message.reply_text('❌ Erro ao baixar imagem. Tente novamente.')
+            return AGUARDANDO_FOTO_MASCARA
+
+    # Se clicou em Gerar ou Pular
+    elif update.callback_query:
         await update.callback_query.answer()
-        # dados vazio
+        if update.callback_query.data not in ['gerar_mascara', 'skip_photo']:
+            return AGUARDANDO_FOTO_MASCARA
+            
+    # Processar
+    from utils import extrair_dados_completos
+    
+    imgs = context.user_data.get('fotos_mascara', [])
+    dados = {}
+    
+    if imgs:
+        msg_proc = await (update.callback_query.message if update.callback_query else update.message).reply_text('⏳ Analisando imagens e gerando máscara...', parse_mode='Markdown')
+        try:
+            dados = await extrair_dados_completos(imgs)
+        except Exception as e:
+            logger.error(f"Erro OCR mascara: {e}")
+        
+        # Tentar apagar msg de processamento
+        try:
+            await msg_proc.delete()
+        except:
+            pass
     
     tipo = context.user_data.get('tipo_mascara')
     texto_final = ""
@@ -636,6 +667,21 @@ async def receber_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tipos_com_serial = ['instalacao', 'instalacao_tv', 'instalacao_mesh', 'instalacao_fttr', 'mudanca_endereco', 'defeito_banda_larga', 'defeito_linha', 'defeito_tv']
     
     if tipo in tipos_com_serial:
+        # Se for REPARO, perguntar se houve troca de ONT
+        if context.user_data.get('modo_registro') == 'reparo':
+            keyboard = [
+                [InlineKeyboardButton("Sim", callback_data='trocou_ont_sim')],
+                [InlineKeyboardButton("Não", callback_data='trocou_ont_nao')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(
+                '🛠️ *Troca de Equipamento*\n\n'
+                'Houve troca da ONT (Modem)?',
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+            return AGUARDANDO_TROCA_ONT
+            
         await query.edit_message_text(
             '✅ *Tipo Selecionado!*\n'
             '📝 *[Etapa 4/5]*\n'
@@ -651,6 +697,35 @@ async def receber_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             '📝 *[Etapa 5/5]*\n'
             'Agora envie as *3 fotos* da instalação.\n'
             '💡 Tire fotos claras.\n'
+            'Quando terminar, digite /finalizar',
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_FOTOS
+
+async def verificar_troca_ont(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == 'trocou_ont_sim':
+        await query.edit_message_text(
+            '✅ *Troca Confirmada*\n'
+            '📝 *[Etapa 4/5]*\n'
+            'Agora envie o *Novo Serial do Modem*:\n'
+            '💡 Exemplo: ZTEGC8...\n\n'
+            '_(Ou digite /cancelar para sair)_',
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_SERIAL
+        
+    else: # trocou_ont_nao
+        # Se não trocou, mantém o que tiver (autofill) ou marca como não trocado
+        if not context.user_data.get('serial_modem'):
+            context.user_data['serial_modem'] = 'Não Trocado'
+            
+        await query.edit_message_text(
+            '✅ *Equipamento Mantido*\n'
+            '📝 *[Etapa 5/5]*\n'
+            'Agora envie as *3 fotos* do reparo.\n'
             'Quando terminar, digite /finalizar',
             parse_mode='Markdown'
         )

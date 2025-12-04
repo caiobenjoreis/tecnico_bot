@@ -15,7 +15,7 @@ from handlers import (
     receber_sa, receber_gpon, receber_tipo, receber_serial, receber_serial_mesh, receber_foto, finalizar, receber_print_autofill, receber_serial_por_foto, receber_serial_mesh_por_foto,
     button_callback, consultar, comando_consultar, comando_reparo, comando_producao,
     comando_mensal, comando_semanal, comando_hoje, receber_data_inicio, receber_data_fim,
-    receber_tipo_mascara, receber_foto_mascara
+    receber_tipo_mascara, receber_foto_mascara, verificar_troca_ont
 )
 from admin_handlers import (
     admin_panel, admin_callback_handler, admin_broadcast_handler, confirmar_broadcast,
@@ -100,6 +100,7 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receber_serial_mesh),
                 MessageHandler(filters.PHOTO, receber_serial_mesh_por_foto)
             ],
+            AGUARDANDO_TROCA_ONT: [CallbackQueryHandler(verificar_troca_ont)],
             AGUARDANDO_FOTOS: [
                 MessageHandler(filters.PHOTO, receber_foto),
                 CommandHandler('finalizar', finalizar),
