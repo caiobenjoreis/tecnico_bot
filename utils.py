@@ -298,29 +298,98 @@ async def extrair_campo_especifico(images: List[bytes], campo: str) -> dict:
 
     return result
 
-async def extrair_dados_completos(images: List[bytes]) -> dict:
+async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None) -> dict:
     """
     Extrai todos os dados possíveis de uma ou mais imagens para preenchimento de máscaras.
+    Se tipo_mascara for fornecido, foca nos campos específicos daquela máscara.
     """
     system = (
-        "Você é um assistente de OCR técnico. Extraia o MÁXIMO de informações das telas do aplicativo técnico. "
-        "Combine as informações de todas as imagens para preencher os campos. "
-        "Retorne APENAS um JSON válido."
+        "Você é um especialista em OCR de sistemas técnicos de telecomunicações. "
+        "Sua tarefa é extrair TODOS os dados solicitados com MÁXIMA precisão. "
+        "NUNCA deixe campos vazios se a informação estiver visível na tela. "
+        "Procure em TODAS as partes da imagem: cabeçalhos, tabelas, campos de formulário, labels, etc. "
+        "Se houver múltiplas imagens, combine as informações para completar TODOS os campos. "
+        "Retorne APENAS um JSON válido e completo."
     )
     
+    # Instruções detalhadas para cada campo
+    campo_instrucoes = {
+        'sa': "Número da SA/OS/Pedido. Procure por: 'SA', 'OS', 'Pedido', 'Ordem de Serviço'. Pode estar no topo da tela ou em campo específico.",
+        'gpon': "Código GPON/Designação/Acesso. Procure por: 'GPON', 'Acesso', 'Designação', 'ONT ID'. Formato alfanumérico com 6-16 caracteres.",
+        'cliente': "Nome completo do cliente. Procure por: 'Cliente', 'Nome', 'Assinante', 'Titular'.",
+        'documento': "CPF/CNPJ do cliente. Procure por: 'CPF', 'CNPJ', 'Doc.', 'Doc. Assoc.', 'Documento'. Pode ter pontos e traços.",
+        'telefone': "Telefone de contato. Procure por: 'Telefone', 'Celular', 'Contato', 'Fone'. Formato com DDD.",
+        'endereco': "Endereço completo. Procure por: 'Endereço', 'Rua', 'Logradouro', 'Local'. Deve incluir rua, número, bairro.",
+        'cdo': "Código da CDO/CDOE. Procure por: 'CDO', 'CDOE', 'Caixa', 'Armário Óptico'.",
+        'porta': "Número da porta. Procure por: 'Porta', 'Port', 'P', 'Porta CDO', 'Porta Cliente'.",
+        'estacao': "Estação/Armário. Procure por: 'Estação', 'EST', 'Armário', 'Central'.",
+        'atividade': "Tipo de atividade/serviço. Procure por: 'Atividade', 'Tipo', 'Serviço', 'Categoria'. Ex: Instalação, Reparo, Defeito."
+    }
+    
+    # Personalização por tipo de máscara para máximo foco
+    if tipo_mascara == 'Batimento CDOE':
+        campos_requeridos = ['atividade', 'estacao', 'cdo', 'porta', 'gpon']
+        instrucoes_extras = (
+            "\n⚠️ CRÍTICO para Batimento CDOE:\n"
+            "- ATIVIDADE: Identifique o tipo de serviço/atividade\n"
+            "- ESTAÇÃO: Localize código da estação/armário\n"
+            "- CDOE: ESSENCIAL - Código da caixa de distribuição\n"
+            "- PORTA: ESSENCIAL - Número da porta na CDO\n"
+            "- GPON: Código de acesso GPON/designação\n"
+        )
+    elif tipo_mascara == 'Pendência':
+        campos_requeridos = ['atividade', 'sa', 'documento', 'gpon', 'cliente', 'telefone', 'endereco']
+        instrucoes_extras = (
+            "\n⚠️ CRÍTICO para Pendência:\n"
+            "- ATIVIDADE: Tipo de serviço (Instalação/Reparo/etc)\n"
+            "- SA: ESSENCIAL - Número da SA/Ordem de Serviço\n"
+            "- DOCUMENTO: ESSENCIAL - CPF/CNPJ (procure 'Doc. Assoc.')\n"
+            "- GPON: Acesso/Designação GPON\n"
+            "- CLIENTE: Nome completo do cliente\n"
+            "- TELEFONE: Número de contato\n"
+            "- ENDEREÇO: Endereço completo (rua, número, bairro)\n"
+        )
+    elif tipo_mascara == 'Cancelamento':
+        campos_requeridos = ['sa', 'documento', 'telefone', 'cliente']
+        instrucoes_extras = (
+            "\n⚠️ CRÍTICO para Cancelamento:\n"
+            "- SA: ESSENCIAL - Número do Pedido/SA\n"
+            "- DOCUMENTO: ESSENCIAL - CPF/CNPJ/Doc. Assoc.\n"
+            "- TELEFONE: Número de contato\n"
+            "- CLIENTE: Nome do cliente\n"
+        )
+    elif tipo_mascara == 'Repasse':
+        campos_requeridos = ['sa', 'gpon', 'documento', 'cdo', 'porta', 'endereco', 'cliente', 'telefone']
+        instrucoes_extras = (
+            "\n⚠️ CRÍTICO para Repasse:\n"
+            "- SA: ESSENCIAL - Número da SA\n"
+            "- GPON: ESSENCIAL - Acesso GPON\n"
+            "- DOCUMENTO: ESSENCIAL - Doc. Assoc./CPF (campo muito importante!)\n"
+            "- CDO: Código da caixa CDO\n"
+            "- PORTA: Número da porta\n"
+            "- ENDEREÇO: Endereço completo\n"
+            "- CLIENTE: Nome do cliente\n"
+            "- TELEFONE: Contato\n"
+        )
+    else:
+        campos_requeridos = ['sa', 'gpon', 'cliente', 'documento', 'telefone', 'endereco', 'cdo', 'porta', 'estacao', 'atividade']
+        instrucoes_extras = "\n⚠️ Extraia TODOS os campos disponíveis nas imagens."
+    
+    # Construir prompt com instruções detalhadas
+    instrucoes_campos = "\n".join([f"- {campo}: {campo_instrucoes[campo]}" for campo in campos_requeridos if campo in campo_instrucoes])
+    
     user = (
-        "Analise as imagens e extraia os seguintes dados se disponíveis:\n"
-        "- sa: Número da SA/Pedido/OS\n"
-        "- gpon: Código GPON/Designação\n"
-        "- cliente: Nome do cliente\n"
-        "- documento: CPF ou CNPJ do cliente\n"
-        "- telefone: Contato/Telefone/Celular\n"
-        "- endereco: Endereço completo (Rua, Número, Bairro, Cidade)\n"
-        "- cdo: Caixa de Distribuição Óptica (CDO/CDOE)\n"
-        "- porta: Porta da CDO\n"
-        "- estacao: Estação/Armário\n"
-        "- atividade: Tipo de atividade (Instalação/Reparo)\n\n"
-        "Retorne JSON no formato:\n"
+        f"🎯 TAREFA: Extrair dados para máscara '{tipo_mascara or 'Geral'}'\n\n"
+        f"📋 CAMPOS OBRIGATÓRIOS:{instrucoes_extras}\n\n"
+        f"🔍 ONDE PROCURAR CADA CAMPO:\n{instrucoes_campos}\n\n"
+        "💡 DICAS:\n"
+        "- Analise TODAS as imagens fornecidas\n"
+        "- Procure em títulos, labels, campos, tabelas\n"
+        "- Se encontrar apenas parte da informação, use-a\n"
+        "- Converta tudo para MAIÚSCULAS\n"
+        "- Remove espaços extras, mas mantenha formatação de CPF/telefone se houver\n"
+        "- Se um campo realmente não existir na imagem, use string vazia\n\n"
+        "📤 FORMATO DE SAÍDA (JSON):\n"
         "{\n"
         '  "sa": "...",\n'
         '  "gpon": "...",\n'
@@ -342,5 +411,16 @@ async def extrair_dados_completos(images: List[bytes]) -> dict:
     except:
         return {}
         
-    # Limpeza básica
-    return {k: str(v).strip().upper() if v else "" for k, v in data.items()}
+    # Limpeza e normalização
+    result = {}
+    for k, v in data.items():
+        if v is None or v == "null":
+            result[k] = ""
+        else:
+            # Manter alguns caracteres especiais em telefone e documento
+            if k in ['telefone', 'documento']:
+                result[k] = str(v).strip()
+            else:
+                result[k] = str(v).strip().upper()
+    
+    return result

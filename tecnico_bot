@@ -154,7 +154,16 @@ def main():
     keep_alive()
 
     logger.info("🤖 Bot iniciado!")
-    app.run_polling()
+    
+    from telegram.error import Conflict
+    try:
+        app.run_polling(drop_pending_updates=True) # drop_pending_updates ajuda a evitar loops de erro em alguns casos
+    except Conflict:
+        logger.error("❌ ERRO CRÍTICO: Conflito de Instâncias Detectado!")
+        logger.error("Outra instância deste bot já está rodando (provavelmente no Render ou localmente).")
+        logger.error("Encerre a outra instância para que esta possa funcionar.")
+    except Exception as e:
+        logger.error(f"❌ Erro fatal: {e}")
 
 if __name__ == '__main__':
     main()

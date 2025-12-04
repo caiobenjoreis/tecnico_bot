@@ -292,7 +292,8 @@ async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
     if imgs:
         msg_proc = await (update.callback_query.message if update.callback_query else update.message).reply_text('⏳ Analisando imagens e gerando máscara...', parse_mode='Markdown')
         try:
-            dados = await extrair_dados_completos(imgs)
+            tipo = context.user_data.get('tipo_mascara')
+            dados = await extrair_dados_completos(imgs, tipo_mascara=tipo)
         except Exception as e:
             logger.error(f"Erro OCR mascara: {e}")
         
