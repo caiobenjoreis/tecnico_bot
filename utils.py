@@ -167,8 +167,8 @@ async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
         "Analise a imagem e extraia os seguintes dados:\n"
         "1. SA (Service Order): Formato geralmente numérico ou SA-números.\n"
         "2. GPON (Acesso): Código alfanumérico (ex: ABCD123456).\n"
-        "3. Serial do Modem (ONT/ONU): Código alfanumérico longo (ex: ZTEGC8..., ALCLB...). Procure por 'Serial', 'S/N', 'SN', 'ONT ID'.\n"
-        "4. Seriais Mesh: Códigos alfanuméricos de extensores/roteadores mesh. Retorne uma lista.\n\n"
+        "3. Serial do Modem (ONT/ONU): Código alfanumérico longo (ex: ZTEGC8..., ALCLB...). É o equipamento PRINCIPAL. Procure por 'Serial', 'S/N', 'SN', 'ONT ID'.\n"
+        "4. Seriais Mesh: Códigos alfanuméricos de extensores/roteadores mesh (equipamentos SECUNDÁRIOS). Retorne uma lista. NÃO inclua o serial do modem aqui.\n\n"
         "Regras:\n"
         "- Ignore dados que não sejam claramente identificáveis.\n"
         "- Converta tudo para MAIÚSCULAS.\n"
@@ -261,8 +261,8 @@ async def extrair_campo_especifico(images: List[bytes], campo: str) -> dict:
     prompts = {
         "sa": "Extraia apenas o número da SA (Service Order). Retorne JSON: {\"sa\": \"valor\"}",
         "gpon": "Extraia apenas o código GPON/Acesso. Retorne JSON: {\"gpon\": \"valor\"}",
-        "serial_do_modem": "Extraia apenas o Serial Number (S/N) do modem/ONT. Retorne JSON: {\"serial_do_modem\": \"valor\"}",
-        "mesh": "Extraia apenas os Seriais de equipamentos Mesh. Retorne JSON: {\"mesh\": [\"valor1\", \"valor2\"]}"
+        "serial_do_modem": "Extraia apenas o Serial Number (S/N) do modem/ONT principal. NÃO confunda com Mesh. Retorne JSON: {\"serial_do_modem\": \"valor\"}",
+        "mesh": "Extraia apenas os Seriais de equipamentos Mesh (extensores). NÃO inclua o modem principal. Retorne JSON: {\"mesh\": [\"valor1\", \"valor2\"]}"
     }
     
     user_prompt = prompts.get(campo, f"Extraia o campo {campo}. Retorne JSON.")

@@ -372,11 +372,16 @@ async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_T
         if d_serial.get('serial_do_modem'):
             data['serial_do_modem'] = d_serial['serial_do_modem']
     # Não extrair mesh nesta etapa para evitar falsos positivos
-    data['mesh'] = []
+    # data['mesh'] = []  <-- Removido para permitir preenchimento de mesh
     sa = data.get('sa')
     gpon = data.get('gpon')
     serial_modem = data.get('serial_do_modem')
-    mesh_list = [m for m in (data.get('mesh') or []) if is_valid_serial(m)]
+    
+    # Filtrar mesh: válido e diferente do modem principal
+    mesh_list = [
+        m for m in (data.get('mesh') or []) 
+        if is_valid_serial(m) and m != serial_modem
+    ]
     if sa:
         context.user_data['sa'] = sa
     if gpon:
@@ -387,7 +392,9 @@ async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_T
         serial_modem = None
     if mesh_list:
         context.user_data['mesh_candidates'] = mesh_list
-    mesh_text = 'não informado'
+        mesh_text = ', '.join(mesh_list)
+    else:
+        mesh_text = 'não informado'
     msg = (
         '🧠 *Autopreenchimento por Foto*\n\n'
         f"SA: `{escape_markdown(sa)}`\n"
