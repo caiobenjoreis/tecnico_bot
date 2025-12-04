@@ -232,6 +232,7 @@ async def receber_tipo_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
         return AGUARDANDO_TIPO_MASCARA
         
     context.user_data['tipo_mascara'] = tipo
+    context.user_data['fotos_mascara'] = []
     
     keyboard = [[InlineKeyboardButton("⏩ Pular Foto (Preencher Manual)", callback_data='skip_photo')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -368,12 +369,17 @@ async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
     msg = f"✅ *Máscara Gerada:*\n\n```\n{texto_final}\n```\n\n👆 _Toque para copiar_"
     
     if update.callback_query:
-        await update.callback_query.edit_message_text(msg, parse_mode='Markdown')
+        # Tenta apagar a mensagem do botão "Gerar" para limpar o chat
+        try:
+            await update.callback_query.message.delete()
+        except:
+            pass
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode='Markdown')
     else:
         await update.message.reply_text(msg, parse_mode='Markdown')
         
-    # Retorna ao menu principal ou encerra? Melhor encerrar para não prender
-    await exibir_menu_principal(update, context, update.effective_user.first_name)
+    # Retorna ao menu principal (enviando nova mensagem)
+    await exibir_menu_principal(update, context, update.effective_user.first_name, new_message=True)
     return ConversationHandler.END
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -407,7 +413,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await exibir_menu_principal(update, context, username)
     return ConversationHandler.END
 
-async def exibir_menu_principal(update: Update, context: ContextTypes.DEFAULT_TYPE, username: str):
+async def exibir_menu_principal(update: Update, context: ContextTypes.DEFAULT_TYPE, username: str, new_message: bool = False):
     keyboard = [
         [InlineKeyboardButton("📝 Nova Instalação", callback_data='registrar')],
         [InlineKeyboardButton("🛠️ Novo Reparo", callback_data='registrar_reparo')],
@@ -427,10 +433,11 @@ async def exibir_menu_principal(update: Update, context: ContextTypes.DEFAULT_TY
         '🏆 Qualidade e agilidade. Bora bater meta hoje! 🚀'
     )
     
-    if update.callback_query:
+    if update.callback_query and not new_message:
         await update.callback_query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
     else:
-        await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+        chat_id = update.effective_chat.id
+        await context.bot.send_message(chat_id=chat_id, text=msg, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def receber_nome(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome = update.message.text.strip()
