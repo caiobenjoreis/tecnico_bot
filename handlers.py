@@ -718,9 +718,8 @@ async def verificar_troca_ont(update: Update, context: ContextTypes.DEFAULT_TYPE
         return AGUARDANDO_SERIAL
         
     else: # trocou_ont_nao
-        # Se não trocou, mantém o que tiver (autofill) ou marca como não trocado
-        if not context.user_data.get('serial_modem'):
-            context.user_data['serial_modem'] = 'Não Trocado'
+        # Força "Não Trocado" para não exibir serial antigo/errado
+        context.user_data['serial_modem'] = 'Não Trocado'
             
         await query.edit_message_text(
             '✅ *Equipamento Mantido*\n'
@@ -982,7 +981,7 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f'🔗 GPON: `{nova_instalacao["gpon"]}`\n'
         ]
     
-        if nova_instalacao.get("serial_modem"):
+        if nova_instalacao.get("serial_modem") and nova_instalacao.get("serial_modem") != 'Não Trocado':
             msg_parts.append(f'📟 Serial Modem: `{nova_instalacao["serial_modem"]}`\n')
             
         if nova_instalacao.get("serial_mesh"):
