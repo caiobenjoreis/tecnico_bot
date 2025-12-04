@@ -14,7 +14,8 @@ from handlers import (
     receber_nome, receber_sobrenome, receber_regiao,
     receber_sa, receber_gpon, receber_tipo, receber_serial, receber_serial_mesh, receber_foto, finalizar, receber_print_autofill, receber_serial_por_foto, receber_serial_mesh_por_foto,
     button_callback, consultar, comando_consultar, comando_reparo, comando_producao,
-    comando_mensal, comando_semanal, comando_hoje, receber_data_inicio, receber_data_fim
+    comando_mensal, comando_semanal, comando_hoje, receber_data_inicio, receber_data_fim,
+    receber_tipo_mascara, receber_foto_mascara
 )
 from admin_handlers import (
     admin_panel, admin_callback_handler, admin_broadcast_handler, confirmar_broadcast,
@@ -120,7 +121,14 @@ def main():
             
             # Admin Enquete
             AGUARDANDO_ENQUETE: [MessageHandler(filters.ALL, admin_poll_handler)],
-            AGUARDANDO_CONFIRMACAO_ENQUETE: [CallbackQueryHandler(confirmar_enquete)]
+            AGUARDANDO_CONFIRMACAO_ENQUETE: [CallbackQueryHandler(confirmar_enquete)],
+            
+            # Máscaras
+            AGUARDANDO_TIPO_MASCARA: [CallbackQueryHandler(receber_tipo_mascara)],
+            AGUARDANDO_FOTO_MASCARA: [
+                MessageHandler(filters.PHOTO, receber_foto_mascara),
+                CallbackQueryHandler(receber_foto_mascara) # Para o botão de pular
+            ]
         },
         fallbacks=[
             CommandHandler('cancelar', cancelar),

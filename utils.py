@@ -297,3 +297,49 @@ async def extrair_campo_especifico(images: List[bytes], campo: str) -> dict:
         if valid_mesh: result["mesh"] = valid_mesh
 
     return result
+
+async def extrair_dados_completos(image_bytes: bytes) -> dict:
+    """
+    Extrai todos os dados possíveis de uma imagem para preenchimento de máscaras.
+    """
+    system = (
+        "Você é um assistente de OCR técnico. Extraia o MÁXIMO de informações da tela do aplicativo técnico. "
+        "Retorne APENAS um JSON válido."
+    )
+    
+    user = (
+        "Analise a imagem e extraia os seguintes dados se disponíveis:\n"
+        "- sa: Número da SA/Pedido/OS\n"
+        "- gpon: Código GPON/Designação\n"
+        "- cliente: Nome do cliente\n"
+        "- documento: CPF ou CNPJ do cliente\n"
+        "- telefone: Contato/Telefone/Celular\n"
+        "- endereco: Endereço completo (Rua, Número, Bairro, Cidade)\n"
+        "- cdo: Caixa de Distribuição Óptica (CDO/CDOE)\n"
+        "- porta: Porta da CDO\n"
+        "- estacao: Estação/Armário\n"
+        "- atividade: Tipo de atividade (Instalação/Reparo)\n\n"
+        "Retorne JSON no formato:\n"
+        "{\n"
+        '  "sa": "...",\n'
+        '  "gpon": "...",\n'
+        '  "cliente": "...",\n'
+        '  "documento": "...",\n'
+        '  "telefone": "...",\n'
+        '  "endereco": "...",\n'
+        '  "cdo": "...",\n'
+        '  "porta": "...",\n'
+        '  "estacao": "...",\n'
+        '  "atividade": "..."\n'
+        "}"
+    )
+
+    response_text = await _call_groq_vision(system, user, [image_bytes], json_mode=True)
+    
+    try:
+        data = json.loads(response_text)
+    except:
+        return {}
+        
+    # Limpeza básica
+    return {k: str(v).strip().upper() if v else "" for k, v in data.items()}

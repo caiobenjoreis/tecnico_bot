@@ -188,6 +188,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(msg, parse_mode='Markdown')
         return None
         
+    elif query.data == 'mascaras':
+        keyboard = [
+            [InlineKeyboardButton("🎭 Batimento CDOE", callback_data='mask_batimento')],
+            [InlineKeyboardButton("🎭 Pendência", callback_data='mask_pendencia')],
+            [InlineKeyboardButton("🎭 Cancelamento", callback_data='mask_cancelamento')],
+            [InlineKeyboardButton("🎭 Repasse", callback_data='mask_repasse')],
+            [InlineKeyboardButton("🔙 Voltar", callback_data='voltar')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text('🎭 *Gerador de Máscaras*\n\nSelecione o modelo desejado:', reply_markup=reply_markup, parse_mode='Markdown')
+        return AGUARDANDO_TIPO_MASCARA
+
     # Callbacks do painel admin
     elif query.data.startswith('admin_'):
         from admin_handlers import admin_callback_handler
@@ -199,6 +211,139 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     return None
+
+async def receber_tipo_mascara(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == 'voltar':
+        await start(update, context)
+        return ConversationHandler.END
+        
+    tipo_map = {
+        'mask_batimento': 'Batimento CDOE',
+        'mask_pendencia': 'Pendência',
+        'mask_cancelamento': 'Cancelamento',
+        'mask_repasse': 'Repasse'
+    }
+    
+    tipo = tipo_map.get(query.data)
+    if not tipo:
+        return AGUARDANDO_TIPO_MASCARA
+        
+    context.user_data['tipo_mascara'] = tipo
+    
+    keyboard = [[InlineKeyboardButton("⏩ Pular Foto (Preencher Manual)", callback_data='skip_photo')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        f'🎭 *Máscara: {tipo}*\n\n'
+        '📸 Envie um *print da tela* do aplicativo com os dados do cliente/serviço para preenchimento automático.\n\n'
+        'Ou clique em *Pular* para receber a máscara em branco.',
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    return AGUARDANDO_FOTO_MASCARA
+
+async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from utils import extrair_dados_completos
+    
+    dados = {}
+    
+    # Se enviou foto
+    if update.message and update.message.photo:
+        photo = update.message.photo[-1]
+        try:
+            file = await photo.get_file()
+            out = io.BytesIO()
+            await file.download_to_memory(out)
+            image_bytes = out.getvalue()
+            
+            await update.message.reply_text('⏳ Analisando imagem...', parse_mode='Markdown')
+            dados = await extrair_dados_completos(image_bytes)
+        except Exception as e:
+            logger.error(f"Erro ao processar foto mascara: {e}")
+            await update.message.reply_text('❌ Erro ao processar imagem. Gerando máscara em branco.')
+    
+    # Se pulou (callback)
+    elif update.callback_query and update.callback_query.data == 'skip_photo':
+        await update.callback_query.answer()
+        # dados vazio
+    
+    tipo = context.user_data.get('tipo_mascara')
+    texto_final = ""
+    
+    # Helpers para pegar dados ou vazio
+    def get(key, default=""): return dados.get(key, default)
+    
+    if tipo == 'Batimento CDOE':
+        texto_final = (
+            "Máscara Batimento CDOE\n\n"
+            f"ATIVIDADE: {get('atividade')}\n"
+            f"ESTAÇÃO: {get('estacao')}\n"
+            f"CDOE: {get('cdo')}\n"
+            f"PORTA CLIENTE: {get('porta')}\n"
+            f"ACESSO GPON: {get('gpon')}\n"
+            "OBS: "
+        )
+        
+    elif tipo == 'Pendência':
+        texto_final = (
+            "Máscara de Pendência!\n\n"
+            f"Tipo de serviço: {get('atividade')}\n"
+            f"SA: {get('sa')}\n"
+            f"Doc associado: {get('documento')}\n"
+            f"GPON: {get('gpon')}\n"
+            f"Cliente: {get('cliente')}\n"
+            f"Contato: {get('telefone')}\n"
+            f"Endereço: {get('endereco')}\n"
+            "Tipo de pendência: \n"
+            "Obs: "
+        )
+        
+    elif tipo == 'Cancelamento':
+        texto_final = (
+            "Máscara de cancelamento:\n\n"
+            f"Pedido: {get('sa')}\n"
+            f"Doc: {get('documento')}\n"
+            f"Telefone: {get('telefone')}\n"
+            f"Nome: {get('cliente')}\n"
+            "Motivo do cancelamento: "
+        )
+        
+    elif tipo == 'Repasse':
+        # Tentar pegar dados do usuário logado para o campo TECNICO
+        user_id = update.effective_user.id
+        db_user = await db.get_user(str(user_id))
+        tecnico_nome = f"{db_user.get('nome','')} {db_user.get('sobrenome','')}".strip() if db_user else ""
+        
+        texto_final = (
+            "MASCARA REPASSE\n\n"
+            "🚨(×)REPARO\n\n"
+            f"🚨 SA: {get('sa')}\n\n"
+            f"🚨ACESSO GPON: {get('gpon')}\n\n"
+            f"🚨DOC ASSOC: {get('documento')}\n\n"
+            f"🚨 CDO: {get('cdo')}\n\n"
+            f"🚨PORTA: {get('porta')}\n\n"
+            f"🚨ENDERECO: {get('endereco')}\n\n"
+            "🚨CIDADE: \n\n"
+            f"🚨CLIENTE: {get('cliente')}\n\n"
+            f"🚨CONTATO: {get('telefone')}\n\n"
+            "🚨OPERADORA: \n\n"
+            f"🚨TECNICO: {tecnico_nome}\n\n"
+            "🚨OBS: "
+        )
+
+    msg = f"✅ *Máscara Gerada:*\n\n```\n{texto_final}\n```\n\n👆 _Toque para copiar_"
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(msg, parse_mode='Markdown')
+    else:
+        await update.message.reply_text(msg, parse_mode='Markdown')
+        
+    # Retorna ao menu principal ou encerra? Melhor encerrar para não prender
+    await exibir_menu_principal(update, context, update.effective_user.first_name)
+    return ConversationHandler.END
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -238,6 +383,7 @@ async def exibir_menu_principal(update: Update, context: ContextTypes.DEFAULT_TY
         [InlineKeyboardButton("🔎 Consultar SA/GPON", callback_data='consultar')],
         [InlineKeyboardButton("📂 Minhas Instalações", callback_data='minhas')],
         [InlineKeyboardButton("📊 Produção do Ciclo", callback_data='consulta_producao')],
+        [InlineKeyboardButton("🎭 Máscaras", callback_data='mascaras')],
         [InlineKeyboardButton("📈 Relatórios", callback_data='relatorios')]
     ]
     
