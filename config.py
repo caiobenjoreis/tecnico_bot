@@ -46,6 +46,7 @@ PONTOS_SERVICO = {
     'instalacao': 2.28,
     'instalacao_tv': 3.58,
     'instalacao_mesh': 2.91,
+    'instalacao_fttr': 5.57,
     'mudanca_endereco': 2.37,
     'retirada': 1.06,
     'servicos': 1.50,

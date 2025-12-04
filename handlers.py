@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 TIPOS_REPARO = ['defeito_banda_larga', 'defeito_linha', 'defeito_tv', 'retirada']
 
 # Tipos que são SEMPRE instalações
-TIPOS_INSTALACAO = ['instalacao', 'instalacao_tv', 'instalacao_mesh']
+TIPOS_INSTALACAO = ['instalacao', 'instalacao_tv', 'instalacao_mesh', 'instalacao_fttr']
 
 # Tipos que podem ser ambos (depende do contexto)
 TIPOS_AMBIGUOS = ['mudanca_endereco', 'servicos', 'servico']
@@ -424,6 +424,7 @@ async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_T
                 [InlineKeyboardButton('Instalação', callback_data='instalacao')],
                 [InlineKeyboardButton('Instalação TV', callback_data='instalacao_tv')],
                 [InlineKeyboardButton('Instalação + Mesh', callback_data='instalacao_mesh')],
+                [InlineKeyboardButton('Instalação FTTR', callback_data='instalacao_fttr')],
                 [InlineKeyboardButton('Mudança de Endereço', callback_data='mudanca_endereco')],
                 [InlineKeyboardButton('Serviços', callback_data='servicos')]
             ]
@@ -465,6 +466,7 @@ async def receber_gpon(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton('Instalação', callback_data='instalacao')],
             [InlineKeyboardButton('Instalação TV', callback_data='instalacao_tv')],
             [InlineKeyboardButton('Instalação + Mesh', callback_data='instalacao_mesh')],
+            [InlineKeyboardButton('Instalação FTTR', callback_data='instalacao_fttr')],
             [InlineKeyboardButton('Mudança de Endereço', callback_data='mudanca_endereco')],
             [InlineKeyboardButton('Serviços', callback_data='servicos')]
         ]
@@ -485,7 +487,7 @@ async def receber_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tipo = query.data
     context.user_data['tipo'] = tipo
     
-    tipos_com_serial = ['instalacao', 'instalacao_tv', 'instalacao_mesh', 'mudanca_endereco', 'defeito_banda_larga', 'defeito_linha', 'defeito_tv']
+    tipos_com_serial = ['instalacao', 'instalacao_tv', 'instalacao_mesh', 'instalacao_fttr', 'mudanca_endereco', 'defeito_banda_larga', 'defeito_linha', 'defeito_tv']
     
     if tipo in tipos_com_serial:
         await query.edit_message_text(
@@ -517,6 +519,17 @@ async def receber_serial(update: Update, context: ContextTypes.DEFAULT_TYPE):
             '✅ *Serial Modem Registrado!*\n'
             '📝 *[Etapa 5/6]*\n'
             'Agora envie o *Serial do Roteador Mesh*:\n'
+            '_(Ou digite /cancelar para sair)_',
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_SERIAL_MESH
+
+    if context.user_data.get('tipo') == 'instalacao_fttr':
+        await update.message.reply_text(
+            '✅ *Serial Modem Registrado!*\n'
+            '📝 *[Etapa 5/6]*\n'
+            'Agora envie os *Seriais dos APs Repetidores FTTR*:\n'
+            '💡 Se houver mais de um, separe por vírgula ou espaço.\n'
             '_(Ou digite /cancelar para sair)_',
             parse_mode='Markdown'
         )
@@ -579,6 +592,20 @@ async def receber_serial_por_foto(update: Update, context: ContextTypes.DEFAULT_
             return AGUARDANDO_SERIAL_MESH
         await update.message.reply_text('✅ *Serial Modem Detectado!*\n\n📝 *[Etapa 5/6]*\nAgora envie o *Serial do Roteador Mesh*:', parse_mode='Markdown')
         return AGUARDANDO_SERIAL_MESH
+
+    if context.user_data.get('tipo') == 'instalacao_fttr':
+        mesh_candidates = context.user_data.get('mesh_candidates') or []
+        if mesh_candidates and not context.user_data.get('serial_mesh'):
+            seriais_fttr = ', '.join(mesh_candidates)
+            context.user_data['serial_mesh'] = seriais_fttr
+            await update.message.reply_text(
+                f"✅ *Serial Modem Detectado!*\n\n📶 APs FTTR detectados: `{escape_markdown(seriais_fttr)}`\n📝 *[Etapa 5/6]*\nSe quiser alterar, envie uma foto ou digite os seriais; caso contrário, siga com as fotos da instalação.",
+                parse_mode='Markdown'
+            )
+            return AGUARDANDO_SERIAL_MESH
+        await update.message.reply_text('✅ *Serial Modem Detectado!*\n\n📝 *[Etapa 5/6]*\nAgora envie os *Seriais dos APs Repetidores FTTR*:', parse_mode='Markdown')
+        return AGUARDANDO_SERIAL_MESH
+
     await update.message.reply_text('✅ *Serial Detectado!*\n\n📝 *[Etapa 5/5]*\nAgora envie as *3 fotos* da instalação.\nQuando terminar, digite /finalizar', parse_mode='Markdown')
     return AGUARDANDO_FOTOS
 
@@ -626,11 +653,21 @@ async def receber_serial_mesh_por_foto(update: Update, context: ContextTypes.DEF
     
     d = await extrair_campo_especifico(imgs, 'mesh')
     mesh_list = [m for m in (d.get('mesh') or []) if is_valid_serial(m)]
+    
     if not mesh_list:
-        await update.message.reply_text('❌ Não consegui extrair o serial mesh. Digite o serial do roteador.')
+        await update.message.reply_text('❌ Não consegui extrair o serial mesh/FTTR. Digite manualmente.')
         return AGUARDANDO_SERIAL_MESH
-    context.user_data['serial_mesh'] = mesh_list[0]
-    await update.message.reply_text('✅ *Serial Mesh Detectado!*\n\n📝 *[Etapa 6/6]*\nAgora envie as *3 fotos* da instalação.\nQuando terminar, digite /finalizar', parse_mode='Markdown')
+        
+    if context.user_data.get('tipo') == 'instalacao_fttr':
+        # Para FTTR, pega todos os encontrados
+        seriais_fttr = ', '.join(mesh_list)
+        context.user_data['serial_mesh'] = seriais_fttr
+        await update.message.reply_text(f'✅ *Seriais FTTR Detectados!*\n`{seriais_fttr}`\n\n📝 *[Etapa 6/6]*\nAgora envie as *3 fotos* da instalação.\nQuando terminar, digite /finalizar', parse_mode='Markdown')
+    else:
+        # Para Mesh normal, pega o primeiro
+        context.user_data['serial_mesh'] = mesh_list[0]
+        await update.message.reply_text('✅ *Serial Mesh Detectado!*\n\n📝 *[Etapa 6/6]*\nAgora envie as *3 fotos* da instalação.\nQuando terminar, digite /finalizar', parse_mode='Markdown')
+        
     return AGUARDANDO_FOTOS
 
 async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -728,7 +765,8 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg_parts.append(f'📟 Serial Modem: `{nova_instalacao["serial_modem"]}`\n')
             
         if nova_instalacao.get("serial_mesh"):
-            msg_parts.append(f'📶 Serial Mesh: `{nova_instalacao["serial_mesh"]}`\n')
+            label_mesh = "Seriais FTTR" if nova_instalacao['tipo'] == 'instalacao_fttr' else "Serial Mesh"
+            msg_parts.append(f'📶 {label_mesh}: `{nova_instalacao["serial_mesh"]}`\n')
     
         status_msg = '📡 Cliente conectado\\! 📈 Produção atualizada' if nova_instalacao['categoria'] != 'reparo' else '🛠️ Atendimento registrado\\! 📈 Produção atualizada'
         registro_msg = '📝 Instalação registrada no @tecnico\\_bot\\!' if nova_instalacao['categoria'] != 'reparo' else '🛠️ Reparo registrado no @tecnico\\_bot\\!'
