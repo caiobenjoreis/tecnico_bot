@@ -398,15 +398,32 @@ async def receber_print_autofill(update: Update, context: ContextTypes.DEFAULT_T
     )
     await update.message.reply_text(msg, parse_mode='Markdown')
     if sa and gpon:
-        keyboard = [
-            [InlineKeyboardButton('Instalação', callback_data='instalacao')],
-            [InlineKeyboardButton('Instalação TV', callback_data='instalacao_tv')],
-            [InlineKeyboardButton('Instalação + Mesh', callback_data='instalacao_mesh')],
-            [InlineKeyboardButton('Mudança de Endereço', callback_data='mudanca_endereco')],
-            [InlineKeyboardButton('Serviços', callback_data='servicos')]
-        ]
+        # Verificar modo_registro para mostrar os botões corretos
+        modo = context.user_data.get('modo_registro') or 'instalacao'
+        logger.info(f"Autopreenchimento detectou SA e GPON - modo: {modo}")
+        
+        if modo == 'reparo':
+            keyboard = [
+                [InlineKeyboardButton('Defeito Banda Larga', callback_data='defeito_banda_larga')],
+                [InlineKeyboardButton('Defeito Linha', callback_data='defeito_linha')],
+                [InlineKeyboardButton('Defeito TV', callback_data='defeito_tv')],
+                [InlineKeyboardButton('Mudança de Endereço', callback_data='mudanca_endereco')],
+                [InlineKeyboardButton('Retirada', callback_data='retirada')],
+                [InlineKeyboardButton('Serviços', callback_data='servicos')]
+            ]
+            prompt_text = 'Selecione o *tipo de reparo*:'
+        else:
+            keyboard = [
+                [InlineKeyboardButton('Instalação', callback_data='instalacao')],
+                [InlineKeyboardButton('Instalação TV', callback_data='instalacao_tv')],
+                [InlineKeyboardButton('Instalação + Mesh', callback_data='instalacao_mesh')],
+                [InlineKeyboardButton('Mudança de Endereço', callback_data='mudanca_endereco')],
+                [InlineKeyboardButton('Serviços', callback_data='servicos')]
+            ]
+            prompt_text = 'Selecione o *tipo de serviço*:'
+        
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text('Selecione o *tipo de serviço*:', reply_markup=reply_markup, parse_mode='Markdown')
+        await update.message.reply_text(prompt_text, reply_markup=reply_markup, parse_mode='Markdown')
         return AGUARDANDO_TIPO
     if not sa:
         await update.message.reply_text('Envie o *número da SA*:', parse_mode='Markdown')
