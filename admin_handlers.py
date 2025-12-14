@@ -289,95 +289,85 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         return ConversationHandler.END
 
     if query.data.startswith('access_user_'):
-        # Agora funciona como TOGGLE direto
-        target_uid = query.data.replace('access_user_', '')
-        
-        # Recuperar página atual do callback se possível, ou default 0
-        current_page = 0
-        # (Para manter a página, precisaríamos passar no callback, mas vamos simplificar:
-        #  se clicar, ele volta pra página 0 ou tenta achar onde estava. 
-        #  Melhor: Vamos fazer o refresh da lista na mesma função admin_access, passando a pagina)
-        
-        user = await db.get_user(target_uid)
-        if user:
-            current_status = user.get('status', 'ativo')
-            new_status = 'bloqueado'
-            
-            if current_status == 'bloqueado':
-                new_status = 'ativo'
-            elif current_status == 'pendente':
-                new_status = 'ativo' # Aprovar pendente vira ativo
-            
-            # Atualizar no banco
-            await db.update_user_status(target_uid, new_status)
-            
-            # Feedback rápido (toast notification)
-            status_text = "ATIVADO" if new_status == 'ativo' else "BLOQUEADO"
-            await query.answer(f"Usuário {status_text}!", show_alert=False)
-            
-            # Recarregar a lista (chama a lógica de listagem novamente)
-            # Para isso, alteramos o query.data para 'admin_access' e deixamos o loop rodar?
-            # Não, precisamos chamar a função recursivamente ou copiar a lógica.
-            # Vamos redirecionar internamente alterando o query.data e chamando o handler de novo?
-            # Não é ideal. Melhor: chamar `admin_panel` com contexto modificado?
-            # A solução mais limpa aqui é "simular" um clique no botão de atualizar a lista.
-            
-            # Vamos simplesmente chamar a lógica de renderização da lista logo abaixo.
-            # Mas qual página? Vamos assumir página 0 por enquanto para simplificar, 
-            # ou implementar um 'state' de página no user_data.
-            
-            # Hack: Alterar query.data para 'admin_access' e deixar cair no if correspondente na proxima iteração?
-            # Não temos loop. Vamos copiar a lógica de renderização (refatorar seria o ideal, mas vamos inline).
-            pass
-        
-        # --- RE-RENDERIZAR LISTA (Cópia da lógica acima) ---
-        page = 0 # Voltamos para página 0 (ou idealmente, leríamos 'access_user_{uid}_{page}')
-        
-        users = await db.get_all_users()
-        def get_status(u): return u.get('status', 'ativo')
-        def sort_key(item):
-            uid, u = item
-            st = get_status(u)
-            prio = 2
-            if st == 'pendente': prio = 0
-            elif st == 'bloqueado': prio = 1
-            return (prio, u.get('nome', '').lower())
-
-        sorted_users = sorted(users.items(), key=sort_key)
-        
-        USERS_PER_PAGE = 8
-        total_users = len(sorted_users)
-        start_idx = page * USERS_PER_PAGE
-        end_idx = start_idx + USERS_PER_PAGE
-        current_page_users = sorted_users[start_idx:end_idx]
-        
-        msg = f"⚙️ *Gestão de Acesso* (Pág {page+1})\nTotal: {total_users} usuários\n\nClique no nome para 🔄 ALTERAR status:"
-        keyboard = []
-        
-        for uid, u in current_page_users:
-            status = get_status(u)
-            icon = "✅"
-            if status == 'pendente': icon = "⏳ [Pendente]"
-            elif status == 'bloqueado': icon = "⛔ [Bloqueado]"
-            
-            nome = f"{u.get('nome','')} {u.get('sobrenome','')}".strip()
-            if len(nome) > 18: nome = nome[:16] + ".."
-            
-            # Callback mantém nome access_user_ para permitir toggle contínuo
-            keyboard.append([InlineKeyboardButton(f"{icon} {nome}", callback_data=f'access_user_{uid}')])
-            
-        nav_buttons = []
-        if page > 0: nav_buttons.append(InlineKeyboardButton("⬅️ Ant", callback_data=f'admin_access_{page-1}'))
-        if end_idx < total_users: nav_buttons.append(InlineKeyboardButton("Próx ➡️", callback_data=f'admin_access_{page+1}'))
-        if nav_buttons: keyboard.append(nav_buttons)
-            
-        keyboard.append([InlineKeyboardButton("🔙 Voltar ao Painel", callback_data='admin_panel_back')])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
         try:
-            await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
-        except:
-             await query.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+            # Agora funciona como TOGGLE direto
+            target_uid = query.data.replace('access_user_', '')
+            logger.info(f"Clicou em access_user: {target_uid}")
+            
+            user = await db.get_user(target_uid)
+            if user:
+                current_status = user.get('status', 'ativo')
+                new_status = 'bloqueado'
+                
+                if current_status == 'bloqueado':
+                    new_status = 'ativo'
+                elif current_status == 'pendente':
+                    new_status = 'ativo' # Aprovar pendente vira ativo
+                
+                logger.info(f"Alterando status {target_uid}: {current_status} -> {new_status}")
+                # Atualizar no banco
+                await db.update_user_status(target_uid, new_status)
+                
+                # Feedback rápido (toast notification)
+                status_text = "ATIVADO" if new_status == 'ativo' else "BLOQUEADO"
+                await query.answer(f"Usuário {status_text}!", show_alert=False)
+            
+            # --- RE-RENDERIZAR LISTA ---
+            page = 0 
+            
+            users = await db.get_all_users()
+            def get_status(u): return u.get('status', 'ativo')
+            def sort_key(item):
+                uid, u = item
+                st = get_status(u)
+                prio = 2
+                if st == 'pendente': prio = 0
+                elif st == 'bloqueado': prio = 1
+                return (prio, u.get('nome', '').lower())
+
+            sorted_users = sorted(users.items(), key=sort_key)
+            
+            USERS_PER_PAGE = 8
+            total_users = len(sorted_users)
+            start_idx = page * USERS_PER_PAGE
+            end_idx = start_idx + USERS_PER_PAGE
+            current_page_users = sorted_users[start_idx:end_idx]
+            
+            import random
+            # Adiciona timestamp visual para garantir refresh
+            msg = f"⚙️ *Gestão de Acesso* (Pág {page+1})\nRef: {random.randint(100,999)}\nTotal: {total_users} usuários\n\nClique no nome para 🔄 ALTERAR status:"
+            keyboard = []
+            
+            for uid, u in current_page_users:
+                status = get_status(u)
+                icon = "✅"
+                if status == 'pendente': icon = "⏳ [Pendente]"
+                elif status == 'bloqueado': icon = "⛔ [Bloqueado]"
+                
+                nome = f"{u.get('nome','')} {u.get('sobrenome','')}".strip()
+                if len(nome) > 18: nome = nome[:16] + ".."
+                
+                # Callback mantém nome access_user_ para permitir toggle contínuo
+                keyboard.append([InlineKeyboardButton(f"{icon} {nome}", callback_data=f'access_user_{uid}')])
+                
+            nav_buttons = []
+            if page > 0: nav_buttons.append(InlineKeyboardButton("⬅️ Ant", callback_data=f'admin_access_{page-1}'))
+            if end_idx < total_users: nav_buttons.append(InlineKeyboardButton("Próx ➡️", callback_data=f'admin_access_{page+1}'))
+            if nav_buttons: keyboard.append(nav_buttons)
+                
+            keyboard.append([InlineKeyboardButton("🔙 Voltar ao Painel", callback_data='admin_panel_back')])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            try:
+                await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+            except Exception as e:
+                logger.error(f"Erro ao editar mensagem da lista: {e}")
+                await query.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+                
+        except Exception as e:
+            logger.error(f"ERRO FATAL em access_user: {e}", exc_info=True)
+            await query.answer(f"Erro: {e}", show_alert=True)
+            
         return ConversationHandler.END
 
     if query.data.startswith('access_set_'):
