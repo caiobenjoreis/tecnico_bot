@@ -21,10 +21,42 @@ TIPOS_INSTALACAO = ['instalacao', 'instalacao_tv', 'instalacao_mesh', 'instalaca
 # Tipos que podem ser ambos (depende do contexto)
 TIPOS_AMBIGUOS = ['mudanca_endereco', 'servicos', 'servico']
 
+# ==================== HELPER FUNCTIONS ====================
+
+async def verificar_acesso_usuario(user_id: int) -> tuple[bool, str]:
+    """
+    Verifica se o usuário tem acesso ao bot.
+    Retorna (tem_acesso, mensagem_erro)
+    """
+    db_user = await db.get_user(str(user_id))
+    
+    if db_user and db_user.get('status') == 'bloqueado':
+        return False, '⛔ *Acesso Bloqueado*\n\nSeu acesso foi suspenso. Entre em contato com o administrador.'
+    
+    if db_user and db_user.get('status') == 'pendente':
+        return False, '⏳ *Cadastro em Análise*\n\nSeu cadastro está aguardando aprovação do administrador.'
+    
+    return True, ''
+
 # ==================== FLUXO DE INSTALAÇÃO/REPARO ====================
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    
+    # Verificar status do usuário antes de processar qualquer ação
+    # Exceto para callbacks admin que têm sua própria verificação
+    if not query.data.startswith(('admin_', 'broadcast_', 'access_')):
+        user_id = query.from_user.id
+        db_user = await db.get_user(str(user_id))
+        
+        if db_user and db_user.get('status') == 'bloqueado':
+            await query.answer('⛔ Seu acesso está bloqueado. Contate o administrador.', show_alert=True)
+            return ConversationHandler.END
+            
+        if db_user and db_user.get('status') == 'pendente':
+            await query.answer('⏳ Seu cadastro está aguardando aprovação.', show_alert=True)
+            return ConversationHandler.END
+    
     await query.answer()
     
     if query.data == 'registrar':
@@ -1184,16 +1216,31 @@ async def consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def comando_consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tem_acesso, msg_erro = await verificar_acesso_usuario(update.message.from_user.id)
+    if not tem_acesso:
+        await update.message.reply_text(msg_erro, parse_mode='Markdown')
+        return ConversationHandler.END
+    
     await update.message.reply_text('🔎 Digite o SA, GPON ou Serial do Modem para buscar:')
     return AGUARDANDO_CONSULTA
 
 async def comando_reparo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tem_acesso, msg_erro = await verificar_acesso_usuario(update.message.from_user.id)
+    if not tem_acesso:
+        await update.message.reply_text(msg_erro, parse_mode='Markdown')
+        return ConversationHandler.END
+    
     context.user_data['modo_registro'] = 'reparo'
     logger.info(f"Usuário {update.message.from_user.id} iniciou REPARO via comando /reparo")
     await update.message.reply_text('🛠️ *Novo Reparo*\nEnvie o *número da SA:*', parse_mode='Markdown')
     return AGUARDANDO_SA
 
 async def comando_producao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tem_acesso, msg_erro = await verificar_acesso_usuario(update.message.from_user.id)
+    if not tem_acesso:
+        await update.message.reply_text(msg_erro, parse_mode='Markdown')
+        return
+    
     # Atalho para produção
     user_id = update.message.from_user.id
     username = update.message.from_user.username or "User"
@@ -1204,6 +1251,11 @@ async def comando_producao(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def comando_mensal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /mensal - Relatório do mês atual"""
+    tem_acesso, msg_erro = await verificar_acesso_usuario(update.message.from_user.id)
+    if not tem_acesso:
+        await update.message.reply_text(msg_erro, parse_mode='Markdown')
+        return
+    
     from reports import gerar_relatorio_mensal
     insts = await db.get_installations(limit=5000)
     msg = gerar_relatorio_mensal(insts)
@@ -1211,6 +1263,11 @@ async def comando_mensal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def comando_semanal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /semanal - Relatório da semana atual"""
+    tem_acesso, msg_erro = await verificar_acesso_usuario(update.message.from_user.id)
+    if not tem_acesso:
+        await update.message.reply_text(msg_erro, parse_mode='Markdown')
+        return
+    
     from reports import gerar_relatorio_semanal
     insts = await db.get_installations(limit=5000)
     msg = gerar_relatorio_semanal(insts)
@@ -1218,6 +1275,11 @@ async def comando_semanal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def comando_hoje(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /hoje - Relatório de hoje"""
+    tem_acesso, msg_erro = await verificar_acesso_usuario(update.message.from_user.id)
+    if not tem_acesso:
+        await update.message.reply_text(msg_erro, parse_mode='Markdown')
+        return
+    
     from reports import gerar_relatorio_hoje
     insts = await db.get_installations(limit=5000)
     msg = gerar_relatorio_hoje(insts)

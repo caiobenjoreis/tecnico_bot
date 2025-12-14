@@ -161,6 +161,58 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     if not is_admin(user_id):
         await query.answer('❌ Acesso negado', show_alert=True)
         return ConversationHandler.END
+    
+    # Processar access_user_ ANTES de chamar answer() para poder mostrar toast
+    if query.data.startswith('access_user_'):
+        try:
+            parts = query.data.split('_')
+            # access_user_{uid}_{page}_{filter}_{search_mode}
+            
+            target_uid = parts[2]
+            current_page = 0
+            current_filter = 'all'
+            current_search = 'none'
+            
+            if len(parts) >= 4: 
+                try: current_page = int(parts[3])
+                except: current_page = 0
+            if len(parts) >= 5: current_filter = parts[4]
+            if len(parts) >= 6: current_search = parts[5]
+
+            user = await db.get_user(target_uid)
+            if user:
+                current_status = user.get('status', 'ativo')
+                new_status = 'bloqueado'
+                
+                if current_status == 'bloqueado':
+                    new_status = 'ativo'
+                elif current_status == 'pendente':
+                    new_status = 'ativo' # Aprovar
+                
+                success = await db.update_user_status(target_uid, new_status)
+                
+                if success:
+                    status_text = "✅ ATIVADO" if new_status == 'ativo' else "🔒 BLOQUEADO"
+                    await query.answer(f"Usuário {status_text}!", show_alert=False)
+                else:
+                    await query.answer("❌ Erro ao atualizar status", show_alert=True)
+            else:
+                await query.answer("❌ Usuário não encontrado", show_alert=True)
+            
+            # --- RE-RENDERIZAR (Sem recursão) ---
+            msg, reply_markup = await render_access_panel(context, current_page, current_filter, current_search)
+            
+            try:
+                await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+            except Exception as e:
+                logger.error(f"Erro ao editar mensagem da lista: {e}")
+                
+        except Exception as e:
+            logger.error(f"ERRO em access_user: {e}", exc_info=True)
+            try: await query.answer(f"Erro: {e}", show_alert=True)
+            except: pass
+            
+        return ConversationHandler.END
         
     await query.answer()
     
@@ -357,7 +409,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
              # Ignora erro se msg for igual
              pass
         
-    if query.data == 'admin_panel_back':
+    elif query.data == 'admin_panel_back':
         keyboard = [
             [InlineKeyboardButton("📊 Estatísticas Gerais", callback_data='admin_stats')],
             [InlineKeyboardButton("👥 Listar Técnicos", callback_data='admin_users')],
@@ -376,59 +428,68 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         )
         return ConversationHandler.END
 
-    if query.data.startswith('access_user_'):
+    elif query.data.startswith('access_set_'):
+        # Formato: access_set_{status}_{user_id}
         try:
             parts = query.data.split('_')
-            # access_user_{uid}_{page}_{filter}_{search_mode}
-            
-            target_uid = parts[2]
-            current_page = 0
-            current_filter = 'all'
-            current_search = 'none'
-            
-            if len(parts) >= 4: 
-                try: current_page = int(parts[3])
-                except: current_page = 0
-            if len(parts) >= 5: current_filter = parts[4]
-            if len(parts) >= 6: current_search = parts[5]
-
-            user = await db.get_user(target_uid)
-            if user:
-                current_status = user.get('status', 'ativo')
-                new_status = 'bloqueado'
+            if len(parts) >= 4:
+                new_status = parts[2]  # 'ativo' ou 'bloqueado'
+                target_uid = parts[3]
                 
-                if current_status == 'bloqueado':
-                    new_status = 'ativo'
-                elif current_status == 'pendente':
-                    new_status = 'ativo' # Aprovar
+                success = await db.update_user_status(target_uid, new_status)
                 
-                await db.update_user_status(target_uid, new_status)
-                
-                status_text = "ATIVADO" if new_status == 'ativo' else "BLOQUEADO"
-                # AVISO: Não chamar query.answer() aqui pois o admin_callback_handler já chamou!
-                # Podemos chamar se o admin_callback_handler não tivesse chamado, mas ele chama no topo.
-                # Se quisermos toast, teríamos que não chamar lá em cima.
-                # Mas para manter síncrono, apenas renderizamos. O usuário vê o ícone mudar.
-            
-            # --- RE-RENDERIZAR (Sem recursão) ---
-            msg, reply_markup = await render_access_panel(context, current_page, current_filter, current_search)
-            
-            try:
-                await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
-            except Exception as e:
-                logger.error(f"Erro ao editar mensagem da lista: {e}")
-                
+                if success:
+                    user = await db.get_user(target_uid)
+                    nome_completo = "Usuário"
+                    if user:
+                        nome_completo = f"{user.get('nome', '')} {user.get('sobrenome', '')}".strip()
+                    
+                    status_emoji = "✅" if new_status == 'ativo' else "⛔"
+                    status_text = "APROVADO" if new_status == 'ativo' else "BLOQUEADO"
+                    
+                    await query.answer(f"{status_emoji} {nome_completo} {status_text}!", show_alert=True)
+                    
+                    # Atualizar a mensagem removendo os botões
+                    try:
+                        await query.edit_message_text(
+                            query.message.text + f"\n\n{status_emoji} *{status_text}*",
+                            parse_mode='Markdown'
+                        )
+                    except:
+                        pass
+                    
+                    # Notificar o usuário
+                    try:
+                        if new_status == 'ativo':
+                            await context.bot.send_message(
+                                chat_id=int(target_uid),
+                                text=(
+                                    '✅ *Cadastro Aprovado!*\n\n'
+                                    'Seu acesso foi liberado!\n'
+                                    'Use /start para começar a usar o bot.'
+                                ),
+                                parse_mode='Markdown'
+                            )
+                        else:
+                            await context.bot.send_message(
+                                chat_id=int(target_uid),
+                                text=(
+                                    '⛔ *Cadastro Recusado*\n\n'
+                                    'Seu cadastro não foi aprovado.\n'
+                                    'Entre em contato com o administrador para mais informações.'
+                                ),
+                                parse_mode='Markdown'
+                            )
+                    except Exception as e:
+                        logger.error(f"Erro ao notificar usuário {target_uid}: {e}")
+                else:
+                    await query.answer("❌ Erro ao atualizar status", show_alert=True)
+            else:
+                await query.answer("❌ Formato de callback inválido", show_alert=True)
         except Exception as e:
-            logger.error(f"ERRO em access_user: {e}", exc_info=True)
-            # toast error ok
-            try: await query.answer(f"Erro: {e}", show_alert=True)
-            except: pass
-            
-        return ConversationHandler.END
-
-    if query.data.startswith('access_set_'):
-        try: await query.answer("Use o clique direto no nome.", show_alert=True)
-        except: pass
+            logger.error(f"Erro em access_set_: {e}", exc_info=True)
+            await query.answer(f"❌ Erro: {e}", show_alert=True)
+        
         return ConversationHandler.END
 
     # Para outros callbacks admin que não transitam estado
