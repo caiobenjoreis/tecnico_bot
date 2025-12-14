@@ -116,7 +116,7 @@ class DatabaseManager:
             logger.error(f"Error saving installation: {e}")
             return False
 
-    async def get_installations(self, filters: dict = None, limit=1000):
+    async def get_installations(self, filters: dict = None, limit=5000):
         """
         Busca instalações com filtros opcionais.
         Filtros suportados: tecnico_id, data_inicio, data_fim, termo_busca
@@ -142,8 +142,13 @@ class DatabaseManager:
                 if 'sa' in filters:
                     q = q.eq('sa', filters['sa'])
                 
-            # Ordenar por inserção (se tiver id autoincrement) ou trazer tudo
-            # Como não sei se tem ID sequencial, vou limitar
+            # Ordenar por data de criação (mais recente primeiro) para garantir que o limit pegue os atuais
+            # A maioria das tabelas Supabase tem created_at por padrão
+            try:
+                q = q.order('created_at', desc=True)
+            except:
+                pass # Se não tiver created_at, segue sem ordenação (risco de pegar antigos)
+
             return q.limit(limit).execute()
 
         try:
