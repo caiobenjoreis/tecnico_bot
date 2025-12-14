@@ -307,15 +307,16 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             f"Status Atual: *{status_atual.upper()}*\n"
         )
         
-        btn_action = []
-        if status_atual == 'bloqueado':
-            btn_action.append(InlineKeyboardButton("✅ Desbloquear/Ativar", callback_data=f'access_set_ativo_{target_uid}'))
-        else:
-            btn_action.append(InlineKeyboardButton("⛔ Bloquear Acesso", callback_data=f'access_set_bloqueado_{target_uid}'))
-            
-        btn_action.append(InlineKeyboardButton("🔙 Voltar", callback_data='admin_access'))
         
-        reply_markup = InlineKeyboardMarkup([btn_action])
+        keyboard = []
+        if status_atual == 'bloqueado':
+            keyboard.append([InlineKeyboardButton("✅ Desbloquear/Ativar", callback_data=f'access_set_ativo_{target_uid}')])
+        else:
+            keyboard.append([InlineKeyboardButton("⛔ Bloquear Acesso", callback_data=f'access_set_bloqueado_{target_uid}')])
+            
+        keyboard.append([InlineKeyboardButton("🔙 Voltar", callback_data='admin_access')])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
         
     elif query.data.startswith('access_set_'):
@@ -328,10 +329,16 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         
         if success:
             await query.answer(f"Sucesso! Usuário {novo_status}.", show_alert=True)
-            # Reabre lista
-            # Para simplificar, chama o bloco admin_access de novo via recursao ou simulacao
-            # Mas editar mensagem é melhor
-            await query.edit_message_text(f"✅ Status alterado para *{novo_status.upper()}*.", parse_mode='Markdown')
+            # Reabre os detalhes do usuário atualizado para ver a mudança
+            # Chamada recursiva "hack" via edição de callback data não rola fácil,
+            # então copiamos a logica de exibir usuario ou simplificamos:
+            
+            # Vamos exibir a mensagem de sucesso e botão de voltar para lista
+            await query.edit_message_text(
+                f"✅ Status alterado para *{novo_status.upper()}* com sucesso!",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Voltar para Lista", callback_data='admin_access')]]),
+                parse_mode='Markdown'
+            )
             # Pequeno delay e volta pra lista? Ou deixa assim.
         else:
             await query.answer("Erro ao atualizar status.", show_alert=True)
