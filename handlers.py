@@ -1059,8 +1059,7 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             '🎉 Ótimo trabalho\\!\n',
             f'{status_msg}\n',
             f'{registro_msg}\n'
-            f'{registro_msg}\n'
-        ]
+        ])
         
         summary_text = ''.join(msg_parts)
         
