@@ -30,7 +30,8 @@ from handlers import (
 )
 from admin_handlers import (
     admin_panel, admin_callback_handler, admin_broadcast_handler, confirmar_broadcast,
-    admin_poll_handler, confirmar_enquete, admin_access_search_handler
+    admin_poll_handler, confirmar_enquete, admin_access_search_handler,
+    receber_id_tecnico_ajuste, receber_data_ajuste
 )
 
 # Configuração de Logging
@@ -146,7 +147,11 @@ def main():
             ],
             
             # Admin Busca User
-            AGUARDANDO_BUSCA_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_access_search_handler)]
+            AGUARDANDO_BUSCA_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_access_search_handler)],
+
+            # Admin Ajuste Dias
+            AGUARDANDO_ID_TECNICO_AJUSTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_id_tecnico_ajuste)],
+            AGUARDANDO_DATA_AJUSTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_data_ajuste)]
         },
         fallbacks=[
             CommandHandler('cancelar', cancelar)

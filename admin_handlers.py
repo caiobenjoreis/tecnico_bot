@@ -1,6 +1,6 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
-from config import ADMIN_IDS, AGUARDANDO_BROADCAST, AGUARDANDO_CONFIRMACAO_BROADCAST, AGUARDANDO_BUSCA_USER, AGUARDANDO_ENQUETE, AGUARDANDO_CONFIRMACAO_ENQUETE, TZ
+from config import ADMIN_IDS, AGUARDANDO_BROADCAST, AGUARDANDO_CONFIRMACAO_BROADCAST, AGUARDANDO_BUSCA_USER, AGUARDANDO_ENQUETE, AGUARDANDO_CONFIRMACAO_ENQUETE, AGUARDANDO_ID_TECNICO_AJUSTE, AGUARDANDO_DATA_AJUSTE, TZ
 from database import db
 from datetime import datetime
 import io
@@ -152,6 +152,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📋 Todas Instalações", callback_data='admin_all_installs')],
         [InlineKeyboardButton("📢 Enviar Mensagem", callback_data='admin_broadcast')],
         [InlineKeyboardButton("📊 Criar Enquete", callback_data='admin_poll')],
+        [InlineKeyboardButton("🛠️ Ajuste Manual (Dias)", callback_data='admin_fix_days')],
         [InlineKeyboardButton("⚙️ Gestão de Acesso", callback_data='admin_access')],
         [InlineKeyboardButton("📤 Exportar CSV", callback_data='admin_export')],
         [InlineKeyboardButton("🔙 Sair", callback_data='admin_exit')]
@@ -398,6 +399,16 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     elif query.data == 'admin_exit':
         await query.delete_message()
         return ConversationHandler.END
+
+    elif query.data == 'admin_fix_days':
+        await query.edit_message_text(
+            '🛠️ *Ajuste Manual de Dias*\n\n'
+            'Isso insere uma instalação administrativa em uma data específica para ajustar a contagem de dias trabalhados.\n\n'
+            'Digite o *ID do Técnico* que deseja ajustar:\n'
+            '_(Use /cancelar para sair)_',
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_ID_TECNICO_AJUSTE
         
     elif query.data.startswith('admin_access'):
         # Formato: admin_access_{page}_{filter}_{search_mode}
@@ -871,4 +882,70 @@ async def admin_access_search_handler(update: Update, context: ContextTypes.DEFA
     
     await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
     
+    return ConversationHandler.END
+
+async def receber_id_tecnico_ajuste(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.strip()
+    
+    # Validar se é número
+    if not texto.isdigit():
+        await update.message.reply_text('❌ ID inválido. Digite apenas números.')
+        return AGUARDANDO_ID_TECNICO_AJUSTE
+        
+    tecnico = await db.get_user(texto)
+    if not tecnico:
+        await update.message.reply_text('❌ Técnico não encontrado com este ID.\nTente novamente ou use /cancelar.')
+        return AGUARDANDO_ID_TECNICO_AJUSTE
+        
+    context.user_data['ajuste_tecnico_id'] = texto
+    context.user_data['ajuste_tecnico_nome'] = tecnico.get('username') or tecnico.get('nome')
+    
+    await update.message.reply_text(
+        f'👤 Técnico: *{context.user_data["ajuste_tecnico_nome"]}*\n\n'
+        '📅 Digite a *DATA* que deseja adicionar como dia trabalhado:\n'
+        'Formato: `dd/mm/aaaa` (Ex: 01/12/2025)',
+        parse_mode='Markdown'
+    )
+    return AGUARDANDO_DATA_AJUSTE
+
+async def receber_data_ajuste(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    texto = update.message.text.strip()
+    try:
+        data_ajuste = datetime.strptime(texto, '%d/%m/%Y')
+    except:
+        await update.message.reply_text('❌ Data inválida. Use o formato dd/mm/aaaa.')
+        return AGUARDANDO_DATA_AJUSTE
+        
+    tecnico_id = context.user_data.get('ajuste_tecnico_id')
+    
+    # Criar registro de instalação "fake" para contar dia
+    inst_ajuste = {
+        'sa': f'AJUSTE-{datetime.now().strftime("%H%M%S")}',
+        'gpon': 'AJUSTE-ADM',
+        'tipo': 'servicos', # Tipo neutro
+        'categoria': 'instalacao',
+        'fotos': [],
+        'tecnico_id': tecnico_id,
+        'tecnico_nome': context.user_data.get('ajuste_tecnico_nome'),
+        'tecnico_regiao': 'ADM',
+        'serial_modem': None,
+        'serial_mesh': None,
+        # Importante: Hora 12:00 para não ficar 00:00 e parecer erro
+        'data': data_ajuste.strftime('%d/%m/%Y 12:00') 
+    }
+    
+    ok = await db.save_installation(inst_ajuste)
+    
+    if ok:
+        await update.message.reply_text(
+            f'✅ *Dia Adicionado com Sucesso!*\n\n'
+            f'👤 Técnico: {context.user_data["ajuste_tecnico_nome"]}\n'
+            f'📅 Data: {texto}\n'
+            f'📝 Registro: `{inst_ajuste["sa"]}`\n\n'
+            'O sistema agora contabilizará este dia na produção.',
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text('❌ Erro ao salvar no banco de dados.')
+        
     return ConversationHandler.END
