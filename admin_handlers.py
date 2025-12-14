@@ -110,8 +110,18 @@ async def render_access_panel(context, page=0, filter_type='all', search_mode='n
             nome = f"{u.get('nome','')} {u.get('sobrenome','')}".strip()
             if len(nome) > 18: nome = nome[:16] + ".."
             
-            # Callback inclui o estado atual para o retorno ser consistente
-            cb_data = f'access_user_{uid}_{page}_{filter_type}_{search_mode}'
+            # Callback com formato mais curto para não exceder 64 bytes
+            # Formato: au_{uid}_{page}_{filter_inicial}_{search_inicial}
+            filter_short = filter_type[0] if filter_type else 'a'  # a=all, p=pending, b=blocked
+            search_short = 's' if search_mode == 'active' else 'n'  # s=search, n=none
+            cb_data = f'au_{uid}_{page}_{filter_short}_{search_short}'
+            
+            # LOG: Verificar tamanho do callback
+            if len(cb_data) > 64:
+                logger.warning(f"Callback muito longo ({len(cb_data)} bytes): {cb_data}")
+                cb_data = cb_data[:64]  # Truncar se necessário
+            
+            logger.info(f"Criando botão para {nome}: {cb_data} ({len(cb_data)} bytes)")
             keyboard.append([InlineKeyboardButton(f"{icon} {nome}", callback_data=cb_data)])
         
     # Botões de Navegação
@@ -158,26 +168,40 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     user_id = query.from_user.id
     
+    # LOG DE DEBUG - Ver todos os callbacks recebidos
+    logger.info(f"[ADMIN CALLBACK] Recebido: {query.data} de user {user_id}")
+    
     if not is_admin(user_id):
         await query.answer('❌ Acesso negado', show_alert=True)
         return ConversationHandler.END
     
-    # Processar access_user_ ANTES de chamar answer() para poder mostrar toast
-    if query.data.startswith('access_user_'):
+    # Processar au_ (access_user) ANTES de chamar answer() para poder mostrar toast
+    # Formato curto: au_{uid}_{page}_{filter_short}_{search_short}
+    if query.data.startswith('au_'):
+        logger.info(f"[ACCESS_USER] Processando callback: {query.data}")
         try:
             parts = query.data.split('_')
-            # access_user_{uid}_{page}_{filter}_{search_mode}
+            # au_{uid}_{page}_{filter_short}_{search_short}
             
-            target_uid = parts[2]
+            target_uid = parts[1]
             current_page = 0
             current_filter = 'all'
             current_search = 'none'
             
-            if len(parts) >= 4: 
-                try: current_page = int(parts[3])
+            if len(parts) >= 3: 
+                try: current_page = int(parts[2])
                 except: current_page = 0
-            if len(parts) >= 5: current_filter = parts[4]
-            if len(parts) >= 6: current_search = parts[5]
+            
+            # Converter códigos curtos de volta
+            if len(parts) >= 4:
+                filter_short = parts[3]
+                if filter_short == 'p': current_filter = 'pending'
+                elif filter_short == 'b': current_filter = 'blocked'
+                else: current_filter = 'all'
+            
+            if len(parts) >= 5:
+                search_short = parts[4]
+                current_search = 'active' if search_short == 's' else 'none'
 
             logger.info(f"Admin {user_id} alterando status do usuário {target_uid}")
 
@@ -215,7 +239,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 logger.error(f"Erro ao editar mensagem da lista: {e}")
                 
         except Exception as e:
-            logger.error(f"ERRO em access_user: {e}", exc_info=True)
+            logger.error(f"ERRO em au_: {e}", exc_info=True)
             try: await query.answer(f"Erro: {e}", show_alert=True)
             except: pass
             

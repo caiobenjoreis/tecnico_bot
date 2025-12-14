@@ -4,8 +4,18 @@ __pycache__/
 .env
 *.json
 
-# Testes (não necessário em produção)
-test_logic.py
+# Testes e setup local (não necessário em produção)
+test_local.py
+setup_teste.bat
+run_test.bat
+run_bot.bat
+criar_env.bat
+bot_test.log
+INICIO_RAPIDO.md
+CONFIGURAR_ENV.md
+DEBUG_APROVACAO.md
+CHECKLIST_CORRECOES.md
+CORRECOES_GESTAO_ACESSO.md
 
 # IDEs
 .vscode/
