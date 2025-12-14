@@ -198,41 +198,97 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.delete_message()
         return ConversationHandler.END
         
-    elif query.data == 'admin_access':
+    elif query.data.startswith('admin_access'):
+        # Formato: admin_access (página 0) ou admin_access_1 (página 1)
+        page = 0
+        if '_' in query.data.replace('admin_access', ''):
+            try:
+                page = int(query.data.split('_')[-1])
+            except:
+                pass
+                
         users = await db.get_all_users()
         if not users:
             await query.edit_message_text('❌ Nenhum usuário encontrado.')
             return ConversationHandler.END
             
-        # Ordenar: pendentes/bloqueados primeiro, depois ativos
-        # status padrão é 'ativo' se None
+        # Ordenar: pendentes/bloqueados primeiro, depois ativos, depois por nome
         def get_status(u): return u.get('status', 'ativo')
         
-        sorted_users = sorted(users.items(), key=lambda x: get_status(x[1]) == 'ativo')
+        # Lógica de ordenação:
+        # 1. Pendentes (status == 'pendente') -> Prioridade máx
+        # 2. Bloqueados (status == 'bloqueado') -> Prioridade média
+        # 3. Ativos -> Prioridade baixa
+        def sort_key(item):
+            uid, u = item
+            st = get_status(u)
+            prio = 2
+            if st == 'pendente': prio = 0
+            elif st == 'bloqueado': prio = 1
+            return (prio, u.get('nome', '').lower())
+
+        sorted_users = sorted(users.items(), key=sort_key)
         
-        msg = "⚙️ *Gestão de Acesso*\nSelecione um usuário para alterar o status:\n\n"
+        # Paginação
+        USERS_PER_PAGE = 8
+        total_users = len(sorted_users)
+        start_idx = page * USERS_PER_PAGE
+        end_idx = start_idx + USERS_PER_PAGE
+        current_page_users = sorted_users[start_idx:end_idx]
+        
+        msg = f"⚙️ *Gestão de Acesso* (Pág {page+1})\nTotal: {total_users} usuários\n\nSelecione para gerenciar:"
         keyboard = []
         
-        for uid, u in sorted_users:
+        for uid, u in current_page_users:
             status = get_status(u)
-            icon = "✅" if status == 'ativo' else "⛔"
+            icon = "✅"
+            if status == 'pendente': icon = "⏳"
+            elif status == 'bloqueado': icon = "⛔"
+            
             nome = f"{u.get('nome','')} {u.get('sobrenome','')}".strip()
+            # Truncar nome se muito longo
+            if len(nome) > 20: nome = nome[:18] + ".."
             
-            # Callback: access_toggle_{uid}
-            keyboard.append([InlineKeyboardButton(f"{icon} {nome} ({status})", callback_data=f'access_user_{uid}')])
+            keyboard.append([InlineKeyboardButton(f"{icon} {nome}", callback_data=f'access_user_{uid}')])
             
-        keyboard.append([InlineKeyboardButton("🔙 Voltar", callback_data='admin_panel_back')]) # Callback fictício para reabrir painel se quiser, ou só exit
+        # Botões de Navegação
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Ant", callback_data=f'admin_access_{page-1}'))
         
-        # Paginação seria bom, mas para MVP vamos listar tudo (cuidado com limite botão telegram)
-        # Vamos limitar a 20 ultimos se tiver muitos
-        if len(keyboard) > 20: 
-            keyboard = keyboard[:20] 
-            msg += "_(Exibindo apenas os primeiros 20 usuários)_"
-
+        if end_idx < total_users:
+            nav_buttons.append(InlineKeyboardButton("Próx ➡️", callback_data=f'admin_access_{page+1}'))
+            
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+            
+        keyboard.append([InlineKeyboardButton("🔙 Voltar ao Painel", callback_data='admin_panel_back')]) # Usar callback que recarrega o menu
+        
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
         
-    elif query.data.startswith('access_user_'):
+    if query.data == 'admin_panel_back':
+        # Reutilizar a função admin_panel mas precisamos editar a mensagem em vez de enviar nova
+        # Vamos extrair a lógica de montar o teclado do admin_panel para reutilizar ou apenas copiar aqui (mais rápido)
+        keyboard = [
+            [InlineKeyboardButton("📊 Estatísticas Gerais", callback_data='admin_stats')],
+            [InlineKeyboardButton("👥 Listar Técnicos", callback_data='admin_users')],
+            [InlineKeyboardButton("📋 Todas Instalações", callback_data='admin_all_installs')],
+            [InlineKeyboardButton("📢 Enviar Mensagem", callback_data='admin_broadcast')],
+            [InlineKeyboardButton("📊 Criar Enquete", callback_data='admin_poll')],
+            [InlineKeyboardButton("⚙️ Gestão de Acesso", callback_data='admin_access')],
+            [InlineKeyboardButton("📤 Exportar CSV", callback_data='admin_export')],
+            [InlineKeyboardButton("🔙 Sair", callback_data='admin_exit')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            '👑 *PAINEL ADMINISTRATIVO*\nSelecione uma opção:',
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return ConversationHandler.END
+
+    if query.data.startswith('access_user_'):
         target_uid = query.data.replace('access_user_', '')
         user = await db.get_user(target_uid)
         
