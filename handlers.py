@@ -1,10 +1,10 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, constants
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, constants, InputMediaPhoto
 from telegram.ext import ContextTypes, ConversationHandler
 from config import *
 from database import db
 from datetime import datetime
-from reports import gerar_texto_producao, gerar_ranking_texto
-from utils import ciclo_atual, escape_markdown, extrair_campos_por_imagem, extrair_campos_por_imagens, extrair_campo_especifico, is_valid_serial
+from reports import gerar_texto_producao, gerar_ranking_texto, gerar_resumo_progresso
+from utils import ciclo_atual, escape_markdown, extrair_campos_por_imagem, extrair_campos_por_imagens, extrair_campo_especifico, is_valid_serial, calcular_pontos
 import io
 import os
 import logging
@@ -388,8 +388,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     username = user.username or user.first_name
     
-    # Verificar se usuário existe
+    # Verificar se usuário existe e se está bloqueado
     db_user = await db.get_user(str(user_id))
+    
+    if db_user and db_user.get('status') == 'bloqueado':
+        keyboard = [[InlineKeyboardButton("💬 Falar com Admin", url="https://t.me/caioadmin")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            '⛔ *Acesso Bloqueado*\n\n'
+            'Seu acesso foi suspenso. Para regularizar, clique no botão abaixo ou chame: @caioadmin',
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return ConversationHandler.END
+
+    if db_user and db_user.get('status') == 'pendente':
+        await update.message.reply_text(
+            '⏳ *Cadastro em Análise*\n\n'
+            'Seu cadastro foi realizado e está aguardando aprovação do administrador.\n'
+            'Você será notificado assim que for liberado.',
+            parse_mode='Markdown'
+        )
+        return ConversationHandler.END
     
     if not db_user:
         msg_text = (
@@ -462,13 +482,43 @@ async def receber_regiao(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'nome': context.user_data['nome'],
         'sobrenome': context.user_data['sobrenome'],
         'regiao': regiao,
-        'username': username
+        'username': username,
+        'status': 'pendente' # Novo status padrão
     }
     
     await db.save_user(novo_usuario)
-    await update.message.reply_text('✅ Cadastro realizado com sucesso!')
-    await exibir_menu_principal(update, context, username)
+    
+    # Mensagem para o usuário
+    await update.message.reply_text(
+        '✅ *Cadastro Enviado!*\n\n'
+        'Seus dados foram enviados para análise.\n'
+        '⏳ Aguarde a aprovação do administrador para usar o bot.',
+        parse_mode='Markdown'
+    )
+    
+    # Notificar Admins
+    msg_admin = (
+        '👤 *Novo Cadastro Pendente*\n\n'
+        f'Nome: {novo_usuario["nome"]} {novo_usuario["sobrenome"]}\n'
+        f'Região: {regiao}\n'
+        f'User: @{username}\n'
+        f'ID: `{user_id}`'
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Aprovar", callback_data=f'access_set_ativo_{user_id}')],
+        [InlineKeyboardButton("⛔ Bloquear", callback_data=f'access_set_bloqueado_{user_id}')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=msg_admin, reply_markup=reply_markup, parse_mode='Markdown')
+        except:
+            pass # Se admin bloqueou bot ou erro de rede
+
     return ConversationHandler.END
+
 
 async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
@@ -1008,10 +1058,59 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f'📅 *Data:* {escape_markdown_v2(nova_instalacao["data"])}\n\n',
             '🎉 Ótimo trabalho\\!\n',
             f'{status_msg}\n',
-            f'{registro_msg}\n\n',
-            '🔁 Use /start para nova ação\\.'
-        ])
-        await update.message.reply_text(''.join(msg_parts), parse_mode='MarkdownV2')
+            f'{registro_msg}\n'
+            f'{registro_msg}\n'
+        ]
+        
+        summary_text = ''.join(msg_parts)
+        
+        # Enviar Album (Fotos + Caption) se houver fotos
+        fotos_ids = nova_instalacao.get('fotos', [])
+        if fotos_ids:
+            media_group = []
+            for i, file_id in enumerate(fotos_ids):
+                # Apenas a primeira foto leva o caption
+                if i == 0:
+                    media_group.append(InputMediaPhoto(media=file_id, caption=summary_text, parse_mode='MarkdownV2'))
+                else:
+                    media_group.append(InputMediaPhoto(media=file_id))
+            
+            try:
+                await update.message.reply_media_group(media=media_group)
+            except Exception as e:
+                logger.error(f"Erro ao enviar album: {e}")
+                # Fallback se falhar album: envia texto normal
+                await update.message.reply_text(summary_text, parse_mode='MarkdownV2')
+        else:
+            # Sem fotos, envia só texto
+            await update.message.reply_text(summary_text, parse_mode='MarkdownV2')
+
+        # === NOTIFICAÇÃO DE PROGRESSO (QUASE LÁ) ===
+        try:
+            inicio, fim = ciclo_atual()
+            insts_ciclo = await db.get_installations({
+                'tecnico_id': user_id, 
+                'data_inicio': inicio, 
+                'data_fim': fim
+            })
+            pontos_totais = calcular_pontos(insts_ciclo)
+            msg_progresso = gerar_resumo_progresso(pontos_totais)
+            
+            # Adicionar dica de encaminhamento
+            msg_progresso += "\n👆 _Dica: Segure nas fotos acima para encaminhar ao grupo!_"
+            
+            # Envia em mensagem separada usando Markdown V1 com botões de ação rápida
+            keyboard_acoes = [
+                [InlineKeyboardButton("📝 Nova Instalação", callback_data='registrar')],
+                [InlineKeyboardButton("🛠️ Novo Reparo", callback_data='registrar_reparo')],
+                [InlineKeyboardButton("🏠 Voltar ao Menu", callback_data='voltar')]
+            ]
+            reply_markup_acoes = InlineKeyboardMarkup(keyboard_acoes)
+            
+            await update.message.reply_text(msg_progresso, parse_mode='Markdown', reply_markup=reply_markup_acoes)
+        except Exception as e:
+            logger.error(f"Erro ao gerar notificacao de progresso: {e}")
+
     else:
         keyboard = [[InlineKeyboardButton("🔄 Tentar Novamente", callback_data='retry_save')]]
         reply_markup = InlineKeyboardMarkup(keyboard)

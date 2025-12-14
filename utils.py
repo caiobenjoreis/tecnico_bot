@@ -4,7 +4,68 @@ import base64
 import json
 import re
 import logging
-from typing import List
+import asyncio
+from typing import List, Optional, Dict, Any
+from config import TZ, PONTOS_SERVICO, TABELA_FAIXAS, USE_GROQ, GROQ_API_KEY, GROQ_MODEL
+
+# ==================== PROMPTS E CONSTANTES OCR ====================
+
+OCR_SYSTEM_DEFAULT = (
+    "Você é um assistente especializado em OCR de dados técnicos de telecomunicações. "
+    "Sua tarefa é extrair EXATAMENTE os dados solicitados de prints de tela de sistemas técnicos. "
+    "Retorne APENAS um JSON válido."
+)
+
+OCR_USER_DEFAULT = (
+    "Analise a imagem e extraia os seguintes dados:\n"
+    "1. SA (Service Order): Formato geralmente numérico ou SA-números.\n"
+    "2. GPON (Acesso): Código alfanumérico (ex: ABCD123456).\n"
+    "3. Serial do Modem (ONT/ONU): Código alfanumérico longo (ex: ZTEGC8..., ALCLB...). É o equipamento PRINCIPAL. Procure por 'Serial', 'S/N', 'SN', 'ONT ID'.\n"
+    "4. Seriais Mesh: Códigos alfanuméricos de extensores/roteadores mesh (equipamentos SECUNDÁRIOS). Retorne uma lista. NÃO inclua o serial do modem aqui.\n\n"
+    "Regras:\n"
+    "- Ignore dados que não sejam claramente identificáveis.\n"
+    "- Converta tudo para MAIÚSCULAS.\n"
+    "- Remova espaços em branco extras.\n"
+    "- Se não encontrar, retorne null.\n\n"
+    "Retorne o JSON no seguinte formato:\n"
+    "{\n"
+    '  "sa": "...",\n'
+    '  "gpon": "...",\n'
+    '  "serial_do_modem": "...",\n'
+    '  "mesh": ["..."]\n'
+    "}"
+)
+
+OCR_SYSTEM_MASK = (
+    "Você é um especialista em OCR de sistemas técnicos de telecomunicações. "
+    "Sua tarefa é extrair TODOS os dados solicitados com MÁXIMA precisão. "
+    "NUNCA deixe campos vazios se a informação estiver visível na tela. "
+    "Procure em TODAS as partes da imagem: cabeçalhos, tabelas, campos de formulário, labels, etc. "
+    "Se houver múltiplas imagens, combine as informações para completar TODOS os campos. "
+    "Retorne APENAS um JSON válido e completo."
+)
+
+CAMPO_INSTRUCOES = {
+    'sa': "Número da SA/OS/Pedido. Procure por: 'SA', 'OS', 'Pedido', 'Ordem de Serviço'. Pode estar no topo da tela ou em campo específico.",
+    'gpon': "Código GPON/Designação/Acesso. Procure por: 'GPON', 'Acesso', 'Designação', 'ONT ID'. Formato alfanumérico com 6-16 caracteres.",
+    'cliente': "Nome completo do cliente. Procure por: 'Cliente', 'Nome', 'Assinante', 'Titular'.",
+    'documento': "CPF/CNPJ do cliente. Procure por: 'CPF', 'CNPJ', 'Doc.', 'Doc. Assoc.', 'Documento'. Pode ter pontos e traços.",
+    'telefone': "Telefone de contato. Procure por: 'Telefone', 'Celular', 'Contato', 'Fone'. Formato com DDD.",
+    'endereco': "Endereço completo. Procure por: 'Endereço', 'Rua', 'Logradouro', 'Local'. Deve incluir rua, número, bairro.",
+    'cdo': "Código da CDO/CDOE. Procure por: 'CDO', 'CDOE', 'Caixa', 'Armário Óptico'.",
+    'porta': "Número da porta. Procure por: 'Porta', 'Port', 'P', 'Porta CDO', 'Porta Cliente'.",
+    'estacao': "Estação/Armário. Procure por: 'Estação', 'EST', 'Armário', 'Central'.",
+    'atividade': "Tipo de atividade/serviço. Procure por: 'Atividade', 'Tipo', 'Serviço', 'Categoria'. Ex: Instalação, Reparo, Defeito."
+}
+
+OCR_PROMPTS_ESPECIFICOS = {
+    "sa": "Extraia apenas o número da SA (Service Order). Retorne JSON: {\"sa\": \"valor\"}",
+    "gpon": "Extraia apenas o código GPON/Acesso. Retorne JSON: {\"gpon\": \"valor\"}",
+    "serial_do_modem": "Extraia apenas o Serial Number (S/N) do modem/ONT principal. NÃO confunda com Mesh. Retorne JSON: {\"serial_do_modem\": \"valor\"}",
+    "mesh": "Extraia apenas os Seriais de equipamentos Mesh (extensores). NÃO inclua o modem principal. Retorne JSON: {\"mesh\": [\"valor1\", \"valor2\"]}"
+}
+
+# ==================== VALIDAÇÃO ====================
 
 def is_valid_sa(sa: str) -> bool:
     try:
@@ -130,7 +191,7 @@ async def _call_groq_vision(
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": content}
                     ],
-                    "temperature": 0.1, # Leve temperatura para criatividade controlada se necessário, mas 0 é melhor para OCR estrito
+                    "temperature": 0.1, 
                     "max_completion_tokens": 1024,
                 }
                 
@@ -145,9 +206,9 @@ async def _call_groq_vision(
                 logging.warning(f"Groq vision falhou (tentativa {attempt+1}, modelo {model}): {e}")
                 continue # Tenta próximo modelo
         
-        # Se falhou com todos os modelos, espera um pouco antes do próximo retry (se houver)
-        # Mas como já iteramos modelos, talvez não precise de sleep explícito, apenas continue o loop de retries
-        pass
+        # Se falhou com todos os modelos, espera um pouco antes do próximo retry
+        if attempt < retries:
+            await asyncio.sleep(1)
 
     logging.error(f"Todas as tentativas de OCR falharam. Último erro: {last_error}")
     return "{}" if json_mode else ""
@@ -157,34 +218,8 @@ async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
     """
     Extrai SA, GPON, Serial Modem e Mesh de uma imagem.
     """
-    system = (
-        "Você é um assistente especializado em OCR de dados técnicos de telecomunicações. "
-        "Sua tarefa é extrair EXATAMENTE os dados solicitados de prints de tela de sistemas técnicos. "
-        "Retorne APENAS um JSON válido."
-    )
-    
-    user = (
-        "Analise a imagem e extraia os seguintes dados:\n"
-        "1. SA (Service Order): Formato geralmente numérico ou SA-números.\n"
-        "2. GPON (Acesso): Código alfanumérico (ex: ABCD123456).\n"
-        "3. Serial do Modem (ONT/ONU): Código alfanumérico longo (ex: ZTEGC8..., ALCLB...). É o equipamento PRINCIPAL. Procure por 'Serial', 'S/N', 'SN', 'ONT ID'.\n"
-        "4. Seriais Mesh: Códigos alfanuméricos de extensores/roteadores mesh (equipamentos SECUNDÁRIOS). Retorne uma lista. NÃO inclua o serial do modem aqui.\n\n"
-        "Regras:\n"
-        "- Ignore dados que não sejam claramente identificáveis.\n"
-        "- Converta tudo para MAIÚSCULAS.\n"
-        "- Remova espaços em branco extras.\n"
-        "- Se não encontrar, retorne null.\n\n"
-        "Retorne o JSON no seguinte formato:\n"
-        "{\n"
-        '  "sa": "...",\n'
-        '  "gpon": "...",\n'
-        '  "serial_do_modem": "...",\n'
-        '  "mesh": ["..."]\n'
-        "}"
-    )
-
     # Tenta extração via JSON mode
-    response_text = await _call_groq_vision(system, user, [image_bytes], json_mode=True)
+    response_text = await _call_groq_vision(OCR_SYSTEM_DEFAULT, OCR_USER_DEFAULT, [image_bytes], json_mode=True)
     
     data = {}
     try:
@@ -258,14 +293,7 @@ async def extrair_campo_especifico(images: List[bytes], campo: str) -> dict:
     """
     Extrai um campo específico de uma ou mais imagens com prompt focado.
     """
-    prompts = {
-        "sa": "Extraia apenas o número da SA (Service Order). Retorne JSON: {\"sa\": \"valor\"}",
-        "gpon": "Extraia apenas o código GPON/Acesso. Retorne JSON: {\"gpon\": \"valor\"}",
-        "serial_do_modem": "Extraia apenas o Serial Number (S/N) do modem/ONT principal. NÃO confunda com Mesh. Retorne JSON: {\"serial_do_modem\": \"valor\"}",
-        "mesh": "Extraia apenas os Seriais de equipamentos Mesh (extensores). NÃO inclua o modem principal. Retorne JSON: {\"mesh\": [\"valor1\", \"valor2\"]}"
-    }
-    
-    user_prompt = prompts.get(campo, f"Extraia o campo {campo}. Retorne JSON.")
+    user_prompt = OCR_PROMPTS_ESPECIFICOS.get(campo, f"Extraia o campo {campo}. Retorne JSON.")
     system_prompt = "Você é um especialista em OCR. Extraia apenas o dado solicitado. Se não encontrar, retorne null no JSON."
 
     response_text = await _call_groq_vision(system_prompt, user_prompt, images, json_mode=True)
@@ -303,28 +331,10 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
     Extrai todos os dados possíveis de uma ou mais imagens para preenchimento de máscaras.
     Se tipo_mascara for fornecido, foca nos campos específicos daquela máscara.
     """
-    system = (
-        "Você é um especialista em OCR de sistemas técnicos de telecomunicações. "
-        "Sua tarefa é extrair TODOS os dados solicitados com MÁXIMA precisão. "
-        "NUNCA deixe campos vazios se a informação estiver visível na tela. "
-        "Procure em TODAS as partes da imagem: cabeçalhos, tabelas, campos de formulário, labels, etc. "
-        "Se houver múltiplas imagens, combine as informações para completar TODOS os campos. "
-        "Retorne APENAS um JSON válido e completo."
-    )
+
     
     # Instruções detalhadas para cada campo
-    campo_instrucoes = {
-        'sa': "Número da SA/OS/Pedido. Procure por: 'SA', 'OS', 'Pedido', 'Ordem de Serviço'. Pode estar no topo da tela ou em campo específico.",
-        'gpon': "Código GPON/Designação/Acesso. Procure por: 'GPON', 'Acesso', 'Designação', 'ONT ID'. Formato alfanumérico com 6-16 caracteres.",
-        'cliente': "Nome completo do cliente. Procure por: 'Cliente', 'Nome', 'Assinante', 'Titular'.",
-        'documento': "CPF/CNPJ do cliente. Procure por: 'CPF', 'CNPJ', 'Doc.', 'Doc. Assoc.', 'Documento'. Pode ter pontos e traços.",
-        'telefone': "Telefone de contato. Procure por: 'Telefone', 'Celular', 'Contato', 'Fone'. Formato com DDD.",
-        'endereco': "Endereço completo. Procure por: 'Endereço', 'Rua', 'Logradouro', 'Local'. Deve incluir rua, número, bairro.",
-        'cdo': "Código da CDO/CDOE. Procure por: 'CDO', 'CDOE', 'Caixa', 'Armário Óptico'.",
-        'porta': "Número da porta. Procure por: 'Porta', 'Port', 'P', 'Porta CDO', 'Porta Cliente'.",
-        'estacao': "Estação/Armário. Procure por: 'Estação', 'EST', 'Armário', 'Central'.",
-        'atividade': "Tipo de atividade/serviço. Procure por: 'Atividade', 'Tipo', 'Serviço', 'Categoria'. Ex: Instalação, Reparo, Defeito."
-    }
+
     
     # Personalização por tipo de máscara para máximo foco
     if tipo_mascara == 'Batimento CDOE':
@@ -376,7 +386,7 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
         instrucoes_extras = "\n⚠️ Extraia TODOS os campos disponíveis nas imagens."
     
     # Construir prompt com instruções detalhadas
-    instrucoes_campos = "\n".join([f"- {campo}: {campo_instrucoes[campo]}" for campo in campos_requeridos if campo in campo_instrucoes])
+    instrucoes_campos = "\n".join([f"- {campo}: {CAMPO_INSTRUCOES[campo]}" for campo in campos_requeridos if campo in CAMPO_INSTRUCOES])
     
     user = (
         f"🎯 TAREFA: Extrair dados para máscara '{tipo_mascara or 'Geral'}'\n\n"
@@ -404,7 +414,7 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
         "}"
     )
 
-    response_text = await _call_groq_vision(system, user, images, json_mode=True)
+    response_text = await _call_groq_vision(OCR_SYSTEM_MASK, user, images, json_mode=True)
     
     try:
         data = json.loads(response_text)

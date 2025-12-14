@@ -24,6 +24,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📋 Todas Instalações", callback_data='admin_all_installs')],
         [InlineKeyboardButton("📢 Enviar Mensagem", callback_data='admin_broadcast')],
         [InlineKeyboardButton("📊 Criar Enquete", callback_data='admin_poll')],
+        [InlineKeyboardButton("⚙️ Gestão de Acesso", callback_data='admin_access')],
         [InlineKeyboardButton("📤 Exportar CSV", callback_data='admin_export')],
         [InlineKeyboardButton("🔙 Sair", callback_data='admin_exit')]
     ]
@@ -197,6 +198,88 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.delete_message()
         return ConversationHandler.END
         
+    elif query.data == 'admin_access':
+        users = await db.get_all_users()
+        if not users:
+            await query.edit_message_text('❌ Nenhum usuário encontrado.')
+            return ConversationHandler.END
+            
+        # Ordenar: pendentes/bloqueados primeiro, depois ativos
+        # status padrão é 'ativo' se None
+        def get_status(u): return u.get('status', 'ativo')
+        
+        sorted_users = sorted(users.items(), key=lambda x: get_status(x[1]) == 'ativo')
+        
+        msg = "⚙️ *Gestão de Acesso*\nSelecione um usuário para alterar o status:\n\n"
+        keyboard = []
+        
+        for uid, u in sorted_users:
+            status = get_status(u)
+            icon = "✅" if status == 'ativo' else "⛔"
+            nome = f"{u.get('nome','')} {u.get('sobrenome','')}".strip()
+            
+            # Callback: access_toggle_{uid}
+            keyboard.append([InlineKeyboardButton(f"{icon} {nome} ({status})", callback_data=f'access_user_{uid}')])
+            
+        keyboard.append([InlineKeyboardButton("🔙 Voltar", callback_data='admin_panel_back')]) # Callback fictício para reabrir painel se quiser, ou só exit
+        
+        # Paginação seria bom, mas para MVP vamos listar tudo (cuidado com limite botão telegram)
+        # Vamos limitar a 20 ultimos se tiver muitos
+        if len(keyboard) > 20: 
+            keyboard = keyboard[:20] 
+            msg += "_(Exibindo apenas os primeiros 20 usuários)_"
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+        
+    elif query.data.startswith('access_user_'):
+        target_uid = query.data.replace('access_user_', '')
+        user = await db.get_user(target_uid)
+        
+        if not user:
+            await query.answer("Usuário não encontrado.", show_alert=True)
+            return None
+            
+        status_atual = user.get('status', 'ativo')
+        nome = f"{user.get('nome','')} {user.get('sobrenome','')}".strip()
+        
+        msg = (
+            f"👤 *Gerenciar Usuário*\n\n"
+            f"Nome: {nome}\n"
+            f"ID: `{target_uid}`\n"
+            f"Região: {user.get('regiao','-')}\n"
+            f"Status Atual: *{status_atual.upper()}*\n"
+        )
+        
+        btn_action = []
+        if status_atual == 'bloqueado':
+            btn_action.append(InlineKeyboardButton("✅ Desbloquear/Ativar", callback_data=f'access_set_ativo_{target_uid}'))
+        else:
+            btn_action.append(InlineKeyboardButton("⛔ Bloquear Acesso", callback_data=f'access_set_bloqueado_{target_uid}'))
+            
+        btn_action.append(InlineKeyboardButton("🔙 Voltar", callback_data='admin_access'))
+        
+        reply_markup = InlineKeyboardMarkup([btn_action])
+        await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+        
+    elif query.data.startswith('access_set_'):
+        # access_set_ativo_123456
+        parts = query.data.split('_')
+        novo_status = parts[2]
+        target_uid = parts[3]
+        
+        success = await db.update_user_status(target_uid, novo_status)
+        
+        if success:
+            await query.answer(f"Sucesso! Usuário {novo_status}.", show_alert=True)
+            # Reabre lista
+            # Para simplificar, chama o bloco admin_access de novo via recursao ou simulacao
+            # Mas editar mensagem é melhor
+            await query.edit_message_text(f"✅ Status alterado para *{novo_status.upper()}*.", parse_mode='Markdown')
+            # Pequeno delay e volta pra lista? Ou deixa assim.
+        else:
+            await query.answer("Erro ao atualizar status.", show_alert=True)
+
     # Para outros callbacks admin que não transitam estado
     return ConversationHandler.END
 

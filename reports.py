@@ -13,6 +13,10 @@ def gerar_texto_producao(instalacoes: list, inicio: datetime, fim: datetime, use
     valor_unit = tier['valor_turbo'] if turbo_ativo else tier['valor']
     valor_total = pontos * valor_unit
     
+    progresso_msg = gerar_resumo_progresso(pontos)
+
+def gerar_resumo_progresso(pontos: float) -> str:
+    """Gera apenas a mensagem de progresso e próxima meta."""
     # Encontrar próxima faixa
     proxima_faixa = None
     for t in reversed(TABELA_FAIXAS):
@@ -20,8 +24,6 @@ def gerar_texto_producao(instalacoes: list, inicio: datetime, fim: datetime, use
             proxima_faixa = t
             break
             
-    # Barra de progresso
-    progresso_msg = ""
     if proxima_faixa:
         meta = proxima_faixa['min']
         falta = meta - pontos
@@ -29,15 +31,18 @@ def gerar_texto_producao(instalacoes: list, inicio: datetime, fim: datetime, use
         blocos = int(percentual / 10)
         barra = "█" * blocos + "░" * (10 - blocos)
         
-        inst_faltantes = int(falta / 1.5) + 1
+        # Estimar instalações faltantes (média ~2.0 pontos/inst para ser conservador, 
+        # mas vou usar instalação padrão 2.28 como base ou média ponderada simples)
+        # O código original usava 1.5, vou manter para consistencia ou usar algo melhor.
+        inst_faltantes = int(falta / 2.0) + 1 
         
-        progresso_msg = (
-            f'\n🎯 *Próxima Meta: Faixa {proxima_faixa["faixa"]}*\n'
-            f'Progresso: `{barra}` {percentual:.1f}%\n'
-            f'Faltam: *{falta:.2f} pontos* (~{inst_faltantes} inst.)\n'
+        return (
+            f'\n🎯 *Rumo à Faixa {proxima_faixa["faixa"]}*\n'
+            f'📊 Progresso: `{barra}` {percentual:.1f}%\n'
+            f'🚀 Faltam: *{falta:.2f} pts* (~{inst_faltantes} inst.)\n'
         )
     else:
-        progresso_msg = "\n🏆 *Parabéns! Você atingiu a faixa máxima!*\n"
+        return "\n🏆 *Parabéns! Você alcançou o topo (Faixa A)!*\n"
 
     msg = (
         f'📆 *Produção no Período*\n'

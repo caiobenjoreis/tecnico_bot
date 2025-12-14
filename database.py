@@ -47,10 +47,32 @@ class DatabaseManager:
             res = await self._run_async(
                 lambda: self.client.table("usuarios").select("*").eq("id", str(user_id)).execute()
             )
-            return res.data[0] if res.data else None
+            # Verifica se está bloqueado (campo 'status' == 'bloqueado')
+            # Se não tiver campo status, assume ativo.
+            if res.data:
+                user = res.data[0]
+                if user.get('status') == 'bloqueado':
+                    # Retorna user mas com flag de bloqueio para o handler saber
+                    # Ou retorna None se quiser fingir que não existe (mas melhor avisar que tá bloqueado)
+                    # Vou retornar o user normal e o handler verifica o status
+                    return user
+                return user
+            return None
         except Exception as e:
             logger.error(f"Error getting user {user_id}: {e}")
             return None
+
+    async def update_user_status(self, user_id: str, status: str) -> bool:
+        """Atualiza o status de um usuário (ex: 'ativo', 'bloqueado')."""
+        if not self.client: return False
+        try:
+            await self._run_async(
+                lambda: self.client.table("usuarios").update({"status": status}).eq("id", str(user_id)).execute()
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error updating user status {user_id}: {e}")
+            return False
 
     async def save_user(self, user_data: dict):
         if not self.client: return False
