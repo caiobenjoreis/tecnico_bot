@@ -149,13 +149,20 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Ordenar por data (mais recente primeiro)
         insts_sorted = sorted(insts, key=lambda x: datetime.strptime(x['data'], '%d/%m/%Y %H:%M'), reverse=True)
         
-        for inst in insts_sorted:
+        # Limitar exibição para evitar erro de tamanho de mensagem
+        MAX_ITEMS = 30
+        exibidos = insts_sorted[:MAX_ITEMS]
+        
+        for inst in exibidos:
             tipo = inst.get('tipo', 'Instalação')
             from config import PONTOS_SERVICO
             pontos = PONTOS_SERVICO.get(tipo.lower(), 0)
             msg += f"📅 {inst['data']} | {pontos} pts\n"
             msg += f"🔧 {tipo} | SA: {inst['sa']}\n"
-            msg += f"──────────────────\n"
+            msg += f"───\n"
+            
+        if len(insts_sorted) > MAX_ITEMS:
+            msg += f"\n... e mais {len(insts_sorted) - MAX_ITEMS} registros.\n───────────────\n"
         
         # Truncar se muito longo
         if len(msg) > 4000:

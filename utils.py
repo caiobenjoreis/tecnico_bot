@@ -120,8 +120,9 @@ def contar_dias_produtivos(instalacoes: list) -> int:
 def obter_faixa_valor(pontos: float):
     """Retorna a faixa de valor baseada nos pontos."""
     p = float(pontos)
+    # Assume TABELA_FAIXAS ordenada decrescente por min (A -> I)
     for tier in TABELA_FAIXAS:
-        if tier['min'] <= p <= tier['max']:
+        if p >= tier['min']:
             return tier
     return TABELA_FAIXAS[-1]
 
