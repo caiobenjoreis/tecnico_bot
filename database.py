@@ -142,13 +142,12 @@ class DatabaseManager:
                 if 'sa' in filters:
                     q = q.eq('sa', filters['sa'])
                 
-            # Ordenar por data de criação (mais recente primeiro) para garantir que o limit pegue os atuais
-            # A maioria das tabelas Supabase tem created_at por padrão
+            # Ordenar por inserção (id autoincrement) para trazer os mais recentes
             try:
-                q = q.order('created_at', desc=True)
+                q = q.order('id', desc=True)
             except:
-                pass # Se não tiver created_at, segue sem ordenação (risco de pegar antigos)
-
+                pass
+            
             return q.limit(limit).execute()
 
         try:
