@@ -290,6 +290,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     if query.data.startswith('access_user_'):
         target_uid = query.data.replace('access_user_', '')
+        print(f"DEBUG: Buscando usuario {target_uid}") # Log simples para console
         user = await db.get_user(target_uid)
         
         if not user:
@@ -297,6 +298,8 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             return None
             
         status_atual = user.get('status', 'ativo')
+        print(f"DEBUG: User encontrado. Status: {status_atual}")
+
         nome = f"{user.get('nome','')} {user.get('sobrenome','')}".strip()
         
         msg = (
@@ -307,7 +310,6 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             f"Status Atual: *{status_atual.upper()}*\n"
         )
         
-        
         keyboard = []
         if status_atual == 'bloqueado':
             keyboard.append([InlineKeyboardButton("✅ Desbloquear/Ativar", callback_data=f'access_set_ativo_{target_uid}')])
@@ -317,7 +319,12 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         keyboard.append([InlineKeyboardButton("🔙 Voltar", callback_data='admin_access')])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+        try:
+            await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+        except Exception as e:
+            print(f"DEBUG: Erro ao editar msg: {e}")
+            # Tentar enviar nova msg se editar falhar (ex: msg muito antiga)
+            await query.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
         
     elif query.data.startswith('access_set_'):
         # access_set_ativo_123456
