@@ -1,6 +1,6 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
-from config import ADMIN_IDS, AGUARDANDO_BROADCAST, AGUARDANDO_CONFIRMACAO_BROADCAST, TZ
+from config import ADMIN_IDS, AGUARDANDO_BROADCAST, AGUARDANDO_CONFIRMACAO_BROADCAST, AGUARDANDO_BUSCA_USER, AGUARDANDO_ENQUETE, AGUARDANDO_CONFIRMACAO_ENQUETE, TZ
 from database import db
 from datetime import datetime
 import io
@@ -8,9 +8,127 @@ import csv
 import asyncio
 from telegram.error import RetryAfter
 from collections import defaultdict
+import logging
+
+logger = logging.getLogger(__name__)
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
+
+async def render_access_panel(context, page=0, filter_type='all', search_mode='none'):
+    """Helper para renderizar o painel de gestão de acesso"""
+    users = await db.get_all_users()
+    if not users:
+        return "❌ Nenhum usuário encontrado.", None
+        
+    # --- FILTRAGEM ---
+    filtered_items = []
+    search_query = context.user_data.get('search_query', '').lower() if search_mode == 'active' else ''
+    
+    for uid, u in users.items():
+        status = u.get('status', 'ativo')
+        nome = str(u.get('nome', '')).lower()
+        sobrenome = str(u.get('sobrenome', '')).lower()
+        full_str = f"{nome} {sobrenome} {uid}"
+        
+        # Filtro por Tab
+        if filter_type == 'pending' and status != 'pendente': continue
+        if filter_type == 'blocked' and status != 'bloqueado': continue
+        
+        # Filtro por Busca
+        if search_mode == 'active' and search_query:
+            if search_query not in full_str: continue
+            
+        filtered_items.append((uid, u))
+        
+    # Ordenação
+    def sort_key(item):
+        uid, u = item
+        st = u.get('status', 'ativo')
+        prio = 2
+        if st == 'pendente': prio = 0
+        elif st == 'bloqueado': prio = 1
+        return (prio, u.get('nome', '').lower())
+
+    sorted_users = sorted(filtered_items, key=sort_key)
+    
+    # Paginação
+    USERS_PER_PAGE = 8
+    total_users = len(sorted_users)
+    
+    # Ajustar paginação se exceder
+    if page * USERS_PER_PAGE >= total_users and page > 0:
+        page = 0
+        
+    start_idx = page * USERS_PER_PAGE
+    end_idx = start_idx + USERS_PER_PAGE
+    current_page_users = sorted_users[start_idx:end_idx]
+    
+    subtitle = "Todos os Usuários"
+    if filter_type == 'pending': subtitle = "⏳ Pendentes"
+    elif filter_type == 'blocked': subtitle = "⛔ Bloqueados"
+    
+    if search_mode == 'active':
+        subtitle = f"🔍 Busca: '{context.user_data.get('search_query')}'"
+    
+    msg = f"⚙️ *Gestão de Acesso*\n📂 {subtitle}\nTotal: {total_users}\n\n"
+    keyboard = []
+    
+    # --- ABAS DE FILTRO ---
+    if search_mode != 'active':
+        tabs = []
+        # Botão Todos
+        txt = "📂 Todos" if filter_type == 'all' else "Todos"
+        tabs.append(InlineKeyboardButton(txt, callback_data='admin_access_0_all_none'))
+        
+        # Botão Pendentes
+        txt = "⏳ Pend" if filter_type == 'pending' else "Pend"
+        tabs.append(InlineKeyboardButton(txt, callback_data='admin_access_0_pending_none'))
+        
+        # Botão Bloqueados
+        txt = "⛔ Block" if filter_type == 'blocked' else "Block"
+        tabs.append(InlineKeyboardButton(txt, callback_data='admin_access_0_blocked_none'))
+        
+        keyboard.append(tabs)
+        
+        # Botão Buscar
+        keyboard.append([InlineKeyboardButton("🔍 Buscar Usuário", callback_data='admin_access_search_start')])
+    else:
+        keyboard.append([InlineKeyboardButton("❌ Limpar Busca", callback_data='admin_access_search_clear')])
+    
+    # Lista de Usuários
+    if not current_page_users:
+        msg += "_Nenhum usuário encontrado com este filtro._"
+    else:
+        msg += "Selecione para alterar:"
+        for uid, u in current_page_users:
+            status = u.get('status', 'ativo')
+            icon = "✅"
+            if status == 'pendente': icon = "⏳"
+            elif status == 'bloqueado': icon = "⛔"
+            
+            nome = f"{u.get('nome','')} {u.get('sobrenome','')}".strip()
+            if len(nome) > 18: nome = nome[:16] + ".."
+            
+            # Callback inclui o estado atual para o retorno ser consistente
+            cb_data = f'access_user_{uid}_{page}_{filter_type}_{search_mode}'
+            keyboard.append([InlineKeyboardButton(f"{icon} {nome}", callback_data=cb_data)])
+        
+    # Botões de Navegação
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Ant", callback_data=f'admin_access_{page-1}_{filter_type}_{search_mode}'))
+    
+    if end_idx < total_users:
+        nav_buttons.append(InlineKeyboardButton("Próx ➡️", callback_data=f'admin_access_{page+1}_{filter_type}_{search_mode}'))
+        
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+        
+    keyboard.append([InlineKeyboardButton("🔙 Voltar ao Painel", callback_data='admin_panel_back')])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    return msg, reply_markup
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -199,77 +317,47 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         return ConversationHandler.END
         
     elif query.data.startswith('admin_access'):
-        # Formato: admin_access (página 0) ou admin_access_1 (página 1)
+        # Formato: admin_access_{page}_{filter}_{search_mode}
+        
+        parts = query.data.split('_')
         page = 0
-        if '_' in query.data.replace('admin_access', ''):
-            try:
-                page = int(query.data.split('_')[-1])
-            except:
-                pass
-                
-        users = await db.get_all_users()
-        if not users:
-            await query.edit_message_text('❌ Nenhum usuário encontrado.')
-            return ConversationHandler.END
-            
-        # Ordenar: pendentes/bloqueados primeiro, depois ativos, depois por nome
-        def get_status(u): return u.get('status', 'ativo')
+        filter_type = 'all'
+        search_mode = 'none'
         
-        # Lógica de ordenação:
-        # 1. Pendentes (status == 'pendente') -> Prioridade máx
-        # 2. Bloqueados (status == 'bloqueado') -> Prioridade média
-        # 3. Ativos -> Prioridade baixa
-        def sort_key(item):
-            uid, u = item
-            st = get_status(u)
-            prio = 2
-            if st == 'pendente': prio = 0
-            elif st == 'bloqueado': prio = 1
-            return (prio, u.get('nome', '').lower())
-
-        sorted_users = sorted(users.items(), key=sort_key)
-        
-        # Paginação
-        USERS_PER_PAGE = 8
-        total_users = len(sorted_users)
-        start_idx = page * USERS_PER_PAGE
-        end_idx = start_idx + USERS_PER_PAGE
-        current_page_users = sorted_users[start_idx:end_idx]
-        
-        msg = f"⚙️ *Gestão de Acesso* (Pág {page+1})\nTotal: {total_users} usuários\n\nSelecione para gerenciar:"
-        keyboard = []
-        
-        for uid, u in current_page_users:
-            status = get_status(u)
-            icon = "✅"
-            if status == 'pendente': icon = "⏳"
-            elif status == 'bloqueado': icon = "⛔"
+        if len(parts) >= 3:
+            try: page = int(parts[2])
+            except: page = 0
+        if len(parts) >= 4:
+            filter_type = parts[3]
+        if len(parts) >= 5:
+            search_mode = parts[4]
             
-            nome = f"{u.get('nome','')} {u.get('sobrenome','')}".strip()
-            # Truncar nome se muito longo
-            if len(nome) > 20: nome = nome[:18] + ".."
-            
-            keyboard.append([InlineKeyboardButton(f"{icon} {nome}", callback_data=f'access_user_{uid}')])
-            
-        # Botões de Navegação
-        nav_buttons = []
-        if page > 0:
-            nav_buttons.append(InlineKeyboardButton("⬅️ Ant", callback_data=f'admin_access_{page-1}'))
+        # Se usuário pediu para buscar
+        if query.data == 'admin_access_search_start':
+            await query.edit_message_text(
+                '🔍 *Consultar Usuário*\n\n'
+                'Digite o *Nome* ou *ID* do técnico que deseja buscar:\n'
+                '_(Digite /cancelar para voltar)_',
+                parse_mode='Markdown'
+            )
+            return AGUARDANDO_BUSCA_USER
         
-        if end_idx < total_users:
-            nav_buttons.append(InlineKeyboardButton("Próx ➡️", callback_data=f'admin_access_{page+1}'))
+        # Se clicou em "Limpar Busca"
+        if query.data == 'admin_access_search_clear':
+            context.user_data.pop('search_query', None)
+            search_mode = 'none'
+            page = 0
             
-        if nav_buttons:
-            keyboard.append(nav_buttons)
-            
-        keyboard.append([InlineKeyboardButton("🔙 Voltar ao Painel", callback_data='admin_panel_back')]) # Usar callback que recarrega o menu
+        # Renderizar painel
+        msg, reply_markup = await render_access_panel(context, page, filter_type, search_mode)
         
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+        try:
+            await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+        except Exception:
+             # Ignora erro se msg for igual
+             pass
         
     if query.data == 'admin_panel_back':
-        # Reutilizar a função admin_panel mas precisamos editar a mensagem em vez de enviar nova
-        # Vamos extrair a lógica de montar o teclado do admin_panel para reutilizar ou apenas copiar aqui (mais rápido)
         keyboard = [
             [InlineKeyboardButton("📊 Estatísticas Gerais", callback_data='admin_stats')],
             [InlineKeyboardButton("👥 Listar Técnicos", callback_data='admin_users')],
@@ -290,10 +378,20 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     if query.data.startswith('access_user_'):
         try:
-            # Agora funciona como TOGGLE direto
-            target_uid = query.data.replace('access_user_', '')
-            logger.info(f"Clicou em access_user: {target_uid}")
+            parts = query.data.split('_')
+            # access_user_{uid}_{page}_{filter}_{search_mode}
             
+            target_uid = parts[2]
+            current_page = 0
+            current_filter = 'all'
+            current_search = 'none'
+            
+            if len(parts) >= 4: 
+                try: current_page = int(parts[3])
+                except: current_page = 0
+            if len(parts) >= 5: current_filter = parts[4]
+            if len(parts) >= 6: current_search = parts[5]
+
             user = await db.get_user(target_uid)
             if user:
                 current_status = user.get('status', 'ativo')
@@ -302,77 +400,35 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 if current_status == 'bloqueado':
                     new_status = 'ativo'
                 elif current_status == 'pendente':
-                    new_status = 'ativo' # Aprovar pendente vira ativo
+                    new_status = 'ativo' # Aprovar
                 
-                logger.info(f"Alterando status {target_uid}: {current_status} -> {new_status}")
-                # Atualizar no banco
                 await db.update_user_status(target_uid, new_status)
                 
-                # Feedback rápido (toast notification)
                 status_text = "ATIVADO" if new_status == 'ativo' else "BLOQUEADO"
-                await query.answer(f"Usuário {status_text}!", show_alert=False)
+                # AVISO: Não chamar query.answer() aqui pois o admin_callback_handler já chamou!
+                # Podemos chamar se o admin_callback_handler não tivesse chamado, mas ele chama no topo.
+                # Se quisermos toast, teríamos que não chamar lá em cima.
+                # Mas para manter síncrono, apenas renderizamos. O usuário vê o ícone mudar.
             
-            # --- RE-RENDERIZAR LISTA ---
-            page = 0 
+            # --- RE-RENDERIZAR (Sem recursão) ---
+            msg, reply_markup = await render_access_panel(context, current_page, current_filter, current_search)
             
-            users = await db.get_all_users()
-            def get_status(u): return u.get('status', 'ativo')
-            def sort_key(item):
-                uid, u = item
-                st = get_status(u)
-                prio = 2
-                if st == 'pendente': prio = 0
-                elif st == 'bloqueado': prio = 1
-                return (prio, u.get('nome', '').lower())
-
-            sorted_users = sorted(users.items(), key=sort_key)
-            
-            USERS_PER_PAGE = 8
-            total_users = len(sorted_users)
-            start_idx = page * USERS_PER_PAGE
-            end_idx = start_idx + USERS_PER_PAGE
-            current_page_users = sorted_users[start_idx:end_idx]
-            
-            import random
-            # Adiciona timestamp visual para garantir refresh
-            msg = f"⚙️ *Gestão de Acesso* (Pág {page+1})\nRef: {random.randint(100,999)}\nTotal: {total_users} usuários\n\nClique no nome para 🔄 ALTERAR status:"
-            keyboard = []
-            
-            for uid, u in current_page_users:
-                status = get_status(u)
-                icon = "✅"
-                if status == 'pendente': icon = "⏳ [Pendente]"
-                elif status == 'bloqueado': icon = "⛔ [Bloqueado]"
-                
-                nome = f"{u.get('nome','')} {u.get('sobrenome','')}".strip()
-                if len(nome) > 18: nome = nome[:16] + ".."
-                
-                # Callback mantém nome access_user_ para permitir toggle contínuo
-                keyboard.append([InlineKeyboardButton(f"{icon} {nome}", callback_data=f'access_user_{uid}')])
-                
-            nav_buttons = []
-            if page > 0: nav_buttons.append(InlineKeyboardButton("⬅️ Ant", callback_data=f'admin_access_{page-1}'))
-            if end_idx < total_users: nav_buttons.append(InlineKeyboardButton("Próx ➡️", callback_data=f'admin_access_{page+1}'))
-            if nav_buttons: keyboard.append(nav_buttons)
-                
-            keyboard.append([InlineKeyboardButton("🔙 Voltar ao Painel", callback_data='admin_panel_back')])
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
             try:
                 await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
             except Exception as e:
                 logger.error(f"Erro ao editar mensagem da lista: {e}")
-                await query.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
                 
         except Exception as e:
-            logger.error(f"ERRO FATAL em access_user: {e}", exc_info=True)
-            await query.answer(f"Erro: {e}", show_alert=True)
+            logger.error(f"ERRO em access_user: {e}", exc_info=True)
+            # toast error ok
+            try: await query.answer(f"Erro: {e}", show_alert=True)
+            except: pass
             
         return ConversationHandler.END
 
     if query.data.startswith('access_set_'):
-        # Código legado (não usado mais nessa nova versão toggle), pode manter ou remover
-        await query.answer("Use o clique direto no nome.", show_alert=True)
+        try: await query.answer("Use o clique direto no nome.", show_alert=True)
+        except: pass
         return ConversationHandler.END
 
     # Para outros callbacks admin que não transitam estado
@@ -482,9 +538,6 @@ async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE
         return AGUARDANDO_CONFIRMACAO_BROADCAST
 
     if query.data == 'broadcast_back':
-        # Volta para o preview
-        # (Simplificado: apenas pede para reenviar ou cancela, mas idealmente reconstruiria o preview.
-        #  Para economizar código, vamos cancelar e pedir para reenviar ou apenas editar texto)
         await query.edit_message_text('🔙 Operação cancelada. Envie o comando novamente.')
         return ConversationHandler.END
 
@@ -574,7 +627,6 @@ async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if broadcast_data['type'] == 'text':
                     msg = header + broadcast_data['text'] + footer
                     await context.bot.send_message(chat_id=int(uid), text=msg, parse_mode='Markdown')
-                # (Simplificação: apenas re-tenta texto ou ignora mídia complexa no retry para não duplicar código excessivamente aqui)
                 enviados += 1
             except:
                 falhas += 1
@@ -695,4 +747,26 @@ async def confirmar_enquete(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
     context.user_data.pop('poll_data', None)
+    return ConversationHandler.END
+    
+async def admin_access_search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Recebe o termo de busca do admin e exibe a lista filtrada"""
+    user_id = update.message.from_user.id
+    if not is_admin(user_id):
+        return ConversationHandler.END
+        
+    query_text = update.message.text.strip()
+    
+    if query_text in ['/cancelar', '/start', 'cancelar']:
+        await update.message.reply_text('❌ Busca cancelada.')
+        return ConversationHandler.END
+        
+    # Salvar termo de busca
+    context.user_data['search_query'] = query_text
+    
+    # Renderizar painel com busca ativa
+    msg, reply_markup = await render_access_panel(context, 0, 'all', 'active')
+    
+    await update.message.reply_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+    
     return ConversationHandler.END

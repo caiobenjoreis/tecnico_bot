@@ -19,7 +19,7 @@ from handlers import (
 )
 from admin_handlers import (
     admin_panel, admin_callback_handler, admin_broadcast_handler, confirmar_broadcast,
-    admin_poll_handler, confirmar_enquete
+    admin_poll_handler, confirmar_enquete, admin_access_search_handler
 )
 
 # Configuração de Logging
@@ -129,7 +129,10 @@ def main():
             AGUARDANDO_FOTO_MASCARA: [
                 MessageHandler(filters.PHOTO, receber_foto_mascara),
                 CallbackQueryHandler(receber_foto_mascara) # Para o botão de pular
-            ]
+            ],
+            
+            # Admin Busca User
+            AGUARDANDO_BUSCA_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_access_search_handler)]
         },
         fallbacks=[
             CommandHandler('cancelar', cancelar),
