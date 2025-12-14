@@ -169,7 +169,8 @@ def main():
     app.add_handler(CommandHandler('reparo', comando_reparo))
     
     # Handler para callbacks de admin (DEVE vir ANTES do ConversationHandler)
-    app.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^(admin_|access_|au_)'))
+    # Excluímos admin_fix_days para que ele caia no ConversationHandler (pois exige mudança de estado)
+    app.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^(admin_(?!fix_days)|access_|au_)'))
     
     # Conversation Handler (deve vir por último para pegar os callbacks genéricos se não for admin)
     app.add_handler(conv_handler)

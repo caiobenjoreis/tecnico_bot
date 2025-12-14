@@ -14,22 +14,28 @@ def gerar_texto_producao(instalacoes: list, inicio: datetime, fim: datetime, use
     valor_total = pontos * valor_unit
     
     progresso_msg = gerar_resumo_progresso(pontos)
-
+    
+    # Definição de ícones e status
+    status_turbo = "✅ *ATIVO*" if turbo_ativo else "❌ *INATIVO*"
+    if not turbo_ativo:
+        status_turbo += f" ({dias_produtivos}/24 dias)"
+    
     msg = (
-        f'📆 *Produção no Período*\n'
-        f'Período: {inicio.strftime("%d/%m/%Y")} a {fim.strftime("%d/%m/%Y")}\n'
-        f'👤 Técnico: {username}\n\n'
-        f'📊 *Resumo:*\n'
-        f'• Instalações: {len(instalacoes)}\n'
-        f'• Pontos: *{pontos:.2f}*\n'
-        f'• Dias Produtivos: {dias_produtivos}/24\n'
-        f'• Média Diária: {media_dia:.1f}\n'
-        f'{progresso_msg}\n'
-        f'💰 *Financeiro:*\n'
-        f'• Faixa Atual: *{tier["faixa"]}*\n'
-        f'• Modo Turbo: {"✅ ATIVO" if turbo_ativo else "❌ INATIVO"}\n'
-        f'• Valor Ponto: {formata_brl(valor_unit)}\n'
-        f'• *Total Estimado: {formata_brl(valor_total)}*\n'
+        f'🚀 *Painel de Produtividade*\n'
+        f'━━━━━━━━━━━━━━━━━━\n'
+        f'👤 *Técnico:* {username}\n'
+        f'📅 *Ciclo:* {inicio.strftime("%d/%m")} - {fim.strftime("%d/%m")}\n\n'
+        
+        f'📦 *RESUMO OPERACIONAL*\n'
+        f'├ 🔧 Instalações: *{len(instalacoes)}*\n'
+        f'├ ⭐ Pontos: *{pontos:.2f}*\n'
+        f'└ 📅 Modo Turbo: {status_turbo}\n\n'
+        
+        f'💸 *FINANCEIRO (Estimado)*\n'
+        f'━━━━━━━━━━━━━━━━━━\n'
+        f'💰 *{formata_brl(valor_total)}*\n'
+        f'_Baseado na Faixa {tier["faixa"]} - {formata_brl(valor_unit)}/pt_\n'
+        f'{progresso_msg}'
     )
     return msg
 
@@ -47,20 +53,23 @@ def gerar_resumo_progresso(pontos: float) -> str:
         falta = meta - pontos
         percentual = min(100, (pontos / meta) * 100) if meta > 0 else 100
         blocos = int(percentual / 10)
-        barra = "█" * blocos + "░" * (10 - blocos)
-        
-        # Estimar instalações faltantes (média ~2.0 pontos/inst para ser conservador, 
-        # mas vou usar instalação padrão 2.28 como base ou média ponderada simples)
-        # O código original usava 1.5, vou manter para consistencia ou usar algo melhor.
-        inst_faltantes = int(falta / 2.0) + 1 
+        # Barra mais sólida e bonita
+        barra = "▰" * blocos + "▱" * (10 - blocos)
         
         return (
-            f'\\n🎯 *Rumo à Faixa {proxima_faixa["faixa"]}*\\n'
-            f'📊 Progresso: `{barra}` {percentual:.1f}%\\n'
-            f'🚀 Faltam: *{falta:.2f} pts* (~{inst_faltantes} inst.)\\n'
+            f'\n🏆 *PRÓXIMO NÍVEL*\n'
+            f'━━━━━━━━━━━━━━━━━━\n'
+            f'🎯 Rumo à *Faixa {proxima_faixa["faixa"]}*\n'
+            f'{barra} {percentual:.0f}%\n'
+            f'⚡ Falta pouco: *{falta:.2f} pts*'
         )
     else:
-        return "\\n🏆 *Parabéns! Você alcançou o topo (Faixa A)!*\\n"
+        return (
+            f'\n🏆 *NÍVEL MÁXIMO*\n'
+            f'━━━━━━━━━━━━━━━━━━\n'
+            f'👑 Você alcançou a *Faixa A*!\n'
+            f'🚀 Continue assim!'
+        )
 
 def gerar_ranking_texto(instalacoes: list) -> str:
     """Gera o texto do ranking de técnicos."""
