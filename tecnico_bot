@@ -136,7 +136,7 @@ def main():
         },
         fallbacks=[
             CommandHandler('cancelar', cancelar),
-            CallbackQueryHandler(admin_callback_handler, pattern='^admin_')
+            CallbackQueryHandler(admin_callback_handler, pattern='^(admin_|access_)')
         ],
         per_message=False
     )
