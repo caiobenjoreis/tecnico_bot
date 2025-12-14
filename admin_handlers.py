@@ -179,6 +179,8 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             if len(parts) >= 5: current_filter = parts[4]
             if len(parts) >= 6: current_search = parts[5]
 
+            logger.info(f"Admin {user_id} alterando status do usuário {target_uid}")
+
             user = await db.get_user(target_uid)
             if user:
                 current_status = user.get('status', 'ativo')
@@ -189,14 +191,19 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 elif current_status == 'pendente':
                     new_status = 'ativo' # Aprovar
                 
+                logger.info(f"Mudando status de {current_status} para {new_status}")
+                
                 success = await db.update_user_status(target_uid, new_status)
                 
                 if success:
                     status_text = "✅ ATIVADO" if new_status == 'ativo' else "🔒 BLOQUEADO"
+                    logger.info(f"Status atualizado com sucesso: {status_text}")
                     await query.answer(f"Usuário {status_text}!", show_alert=False)
                 else:
+                    logger.error(f"Falha ao atualizar status do usuário {target_uid}")
                     await query.answer("❌ Erro ao atualizar status", show_alert=True)
             else:
+                logger.error(f"Usuário {target_uid} não encontrado no banco")
                 await query.answer("❌ Usuário não encontrado", show_alert=True)
             
             # --- RE-RENDERIZAR (Sem recursão) ---
@@ -434,7 +441,11 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             parts = query.data.split('_')
             if len(parts) >= 4:
                 new_status = parts[2]  # 'ativo' ou 'bloqueado'
-                target_uid = parts[3]
+                # Juntar todas as partes restantes para formar o user_id completo
+                # Isso garante que user_ids com múltiplos dígitos funcionem
+                target_uid = '_'.join(parts[3:])
+                
+                logger.info(f"Tentando atualizar usuário {target_uid} para status {new_status}")
                 
                 success = await db.update_user_status(target_uid, new_status)
                 
@@ -447,6 +458,8 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                     status_emoji = "✅" if new_status == 'ativo' else "⛔"
                     status_text = "APROVADO" if new_status == 'ativo' else "BLOQUEADO"
                     
+                    logger.info(f"Usuário {target_uid} atualizado para {new_status} com sucesso")
+                    
                     await query.answer(f"{status_emoji} {nome_completo} {status_text}!", show_alert=True)
                     
                     # Atualizar a mensagem removendo os botões
@@ -455,8 +468,8 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                             query.message.text + f"\n\n{status_emoji} *{status_text}*",
                             parse_mode='Markdown'
                         )
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.error(f"Erro ao editar mensagem: {e}")
                     
                     # Notificar o usuário
                     try:
@@ -470,6 +483,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                                 ),
                                 parse_mode='Markdown'
                             )
+                            logger.info(f"Notificação de aprovação enviada para {target_uid}")
                         else:
                             await context.bot.send_message(
                                 chat_id=int(target_uid),
@@ -480,11 +494,14 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                                 ),
                                 parse_mode='Markdown'
                             )
+                            logger.info(f"Notificação de bloqueio enviada para {target_uid}")
                     except Exception as e:
                         logger.error(f"Erro ao notificar usuário {target_uid}: {e}")
                 else:
+                    logger.error(f"Falha ao atualizar status do usuário {target_uid}")
                     await query.answer("❌ Erro ao atualizar status", show_alert=True)
             else:
+                logger.error(f"Formato de callback inválido: {query.data}")
                 await query.answer("❌ Formato de callback inválido", show_alert=True)
         except Exception as e:
             logger.error(f"Erro em access_set_: {e}", exc_info=True)
