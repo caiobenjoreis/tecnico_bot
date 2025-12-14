@@ -15,6 +15,24 @@ def gerar_texto_producao(instalacoes: list, inicio: datetime, fim: datetime, use
     
     progresso_msg = gerar_resumo_progresso(pontos)
 
+    msg = (
+        f'📆 *Produção no Período*\n'
+        f'Período: {inicio.strftime("%d/%m/%Y")} a {fim.strftime("%d/%m/%Y")}\n'
+        f'👤 Técnico: {username}\n\n'
+        f'📊 *Resumo:*\n'
+        f'• Instalações: {len(instalacoes)}\n'
+        f'• Pontos: *{pontos:.2f}*\n'
+        f'• Dias Produtivos: {dias_produtivos}/24\n'
+        f'• Média Diária: {media_dia:.1f}\n'
+        f'{progresso_msg}\n'
+        f'💰 *Financeiro:*\n'
+        f'• Faixa Atual: *{tier["faixa"]}*\n'
+        f'• Modo Turbo: {"✅ ATIVO" if turbo_ativo else "❌ INATIVO"}\n'
+        f'• Valor Ponto: {formata_brl(valor_unit)}\n'
+        f'• *Total Estimado: {formata_brl(valor_total)}*\n'
+    )
+    return msg
+
 def gerar_resumo_progresso(pontos: float) -> str:
     """Gera apenas a mensagem de progresso e próxima meta."""
     # Encontrar próxima faixa
@@ -37,30 +55,12 @@ def gerar_resumo_progresso(pontos: float) -> str:
         inst_faltantes = int(falta / 2.0) + 1 
         
         return (
-            f'\n🎯 *Rumo à Faixa {proxima_faixa["faixa"]}*\n'
-            f'📊 Progresso: `{barra}` {percentual:.1f}%\n'
-            f'🚀 Faltam: *{falta:.2f} pts* (~{inst_faltantes} inst.)\n'
+            f'\\n🎯 *Rumo à Faixa {proxima_faixa["faixa"]}*\\n'
+            f'📊 Progresso: `{barra}` {percentual:.1f}%\\n'
+            f'🚀 Faltam: *{falta:.2f} pts* (~{inst_faltantes} inst.)\\n'
         )
     else:
-        return "\n🏆 *Parabéns! Você alcançou o topo (Faixa A)!*\n"
-
-    msg = (
-        f'📆 *Produção no Período*\n'
-        f'Período: {inicio.strftime("%d/%m/%Y")} a {fim.strftime("%d/%m/%Y")}\n'
-        f'👤 Técnico: {username}\n\n'
-        f'📊 *Resumo:*\n'
-        f'• Instalações: {len(instalacoes)}\n'
-        f'• Pontos: *{pontos:.2f}*\n'
-        f'• Dias Produtivos: {dias_produtivos}/24\n'
-        f'• Média Diária: {media_dia:.1f}\n'
-        f'{progresso_msg}\n'
-        f'💰 *Financeiro:*\n'
-        f'• Faixa Atual: *{tier["faixa"]}*\n'
-        f'• Modo Turbo: {"✅ ATIVO" if turbo_ativo else "❌ INATIVO"}\n'
-        f'• Valor Ponto: {formata_brl(valor_unit)}\n'
-        f'• *Total Estimado: {formata_brl(valor_total)}*\n'
-    )
-    return msg
+        return "\\n🏆 *Parabéns! Você alcançou o topo (Faixa A)!*\\n"
 
 def gerar_ranking_texto(instalacoes: list) -> str:
     """Gera o texto do ranking de técnicos."""
