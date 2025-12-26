@@ -19,13 +19,20 @@ OCR_SYSTEM_DEFAULT = (
 OCR_USER_DEFAULT = (
     "Analise a imagem e extraia os seguintes dados:\n"
     "1. SA (Service Order): Formato geralmente numérico ou SA-números.\n"
-    "2. GPON (Acesso): Código alfanumérico (ex: ABCD123456).\n"
+    "2. GPON (Acesso/Designação): MUITO IMPORTANTE! Procure por:\n"
+    "   - Labels: 'GPON', 'Acesso', 'Designação', 'ONT ID', 'Código de Acesso'\n"
+    "   - Formato: Código alfanumérico com 6-20 caracteres\n"
+    "   - Pode conter: letras, números, traços (-), pontos (.), barras (/)\n"
+    "   - Exemplos: ABCD123456, ABC-123-456, ABC.123.456, ABC/123/456\n"
+    "   - Geralmente está próximo ao nome do cliente ou endereço\n"
+    "   - ATENÇÃO: NÃO confunda com CPF, telefone ou CEP!\n"
     "3. Serial do Modem (ONT/ONU): Código alfanumérico longo (ex: ZTEGC8..., ALCLB...). É o equipamento PRINCIPAL. Procure por 'Serial', 'S/N', 'SN', 'ONT ID'.\n"
     "4. Seriais Mesh: Códigos alfanuméricos de extensores/roteadores mesh (equipamentos SECUNDÁRIOS). Retorne uma lista. NÃO inclua o serial do modem aqui.\n\n"
     "Regras:\n"
+    "- Se encontrar múltiplos códigos parecidos com GPON, escolha o que está mais próximo de 'Acesso' ou 'Designação'\n"
     "- Ignore dados que não sejam claramente identificáveis.\n"
     "- Converta tudo para MAIÚSCULAS.\n"
-    "- Remova espaços em branco extras.\n"
+    "- Mantenha traços, pontos e barras no GPON se existirem.\n"
     "- Se não encontrar, retorne null.\n\n"
     "Retorne o JSON no seguinte formato:\n"
     "{\n"
@@ -47,7 +54,7 @@ OCR_SYSTEM_MASK = (
 
 CAMPO_INSTRUCOES = {
     'sa': "Número da SA/OS/Pedido. Procure por: 'SA', 'OS', 'Pedido', 'Ordem de Serviço'. Pode estar no topo da tela ou em campo específico.",
-    'gpon': "Código GPON/Designação/Acesso. Procure por: 'GPON', 'Acesso', 'Designação', 'ONT ID'. Formato alfanumérico com 6-16 caracteres.",
+    'gpon': "Código GPON/Designação/Acesso. CRÍTICO! Procure por: 'GPON', 'Acesso', 'Designação', 'ONT ID', 'Código de Acesso'. Formato alfanumérico com 6-20 caracteres, pode ter traços/pontos/barras. NÃO confunda com CPF ou telefone!",
     'cliente': "Nome completo do cliente. Procure por: 'Cliente', 'Nome', 'Assinante', 'Titular'.",
     'documento': "CPF/CNPJ do cliente. Procure por: 'CPF', 'CNPJ', 'Doc.', 'Doc. Assoc.', 'Documento'. Pode ter pontos e traços.",
     'telefone': "Telefone de contato. Procure por: 'Telefone', 'Celular', 'Contato', 'Fone'. Formato com DDD.",
@@ -60,7 +67,14 @@ CAMPO_INSTRUCOES = {
 
 OCR_PROMPTS_ESPECIFICOS = {
     "sa": "Extraia apenas o número da SA (Service Order). Retorne JSON: {\"sa\": \"valor\"}",
-    "gpon": "Extraia apenas o código GPON/Acesso. Retorne JSON: {\"gpon\": \"valor\"}",
+    "gpon": (
+        "Extraia APENAS o código GPON/Acesso/Designação. "
+        "IMPORTANTE: Procure por labels como 'GPON', 'Acesso', 'Designação', 'ONT ID', 'Código de Acesso'. "
+        "O GPON é um código alfanumérico com 6-20 caracteres, pode conter traços, pontos ou barras. "
+        "Exemplos válidos: ABCD123456, ABC-123-456, ABC.123.456, ABC/123/456. "
+        "NÃO confunda com CPF, telefone, CEP ou endereço! "
+        "Retorne JSON: {\"gpon\": \"valor\"}"
+    ),
     "serial_do_modem": "Extraia apenas o Serial Number (S/N) do modem/ONT principal. NÃO confunda com Mesh. Retorne JSON: {\"serial_do_modem\": \"valor\"}",
     "mesh": "Extraia apenas os Seriais de equipamentos Mesh (extensores). NÃO inclua o modem principal. Retorne JSON: {\"mesh\": [\"valor1\", \"valor2\"]}"
 }
@@ -74,8 +88,27 @@ def is_valid_sa(sa: str) -> bool:
         return False
 
 def is_valid_gpon(gpon: str) -> bool:
+    """Valida GPON com múltiplos formatos aceitos."""
     try:
-        return bool(re.fullmatch(r"[A-Z0-9]{6,16}", gpon or ""))
+        if not gpon:
+            return False
+        
+        gpon = str(gpon).strip().upper()
+        
+        # Aceitar vários formatos comuns de GPON:
+        # 1. Alfanumérico puro (6-20 caracteres)
+        if re.fullmatch(r"[A-Z0-9]{6,20}", gpon):
+            return True
+        
+        # 2. Com traços ou pontos (ex: ABC-123-456 ou ABC.123.456)
+        if re.fullmatch(r"[A-Z0-9\-\.]{6,25}", gpon):
+            return True
+        
+        # 3. Com barras (ex: ABC/123/456)
+        if re.fullmatch(r"[A-Z0-9/]{6,25}", gpon):
+            return True
+        
+        return False
     except Exception:
         return False
 

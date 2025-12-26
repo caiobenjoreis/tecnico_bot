@@ -223,7 +223,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'rel_ranking':
         # Ranking pega tudo (cuidado com performance futura)
         insts = await db.get_installations(limit=5000)
-        msg = gerar_ranking_texto(insts)
+        user_id = query.from_user.id
+        is_admin = user_id in ADMIN_IDS
+        msg = gerar_ranking_texto(insts, is_admin=is_admin)
         await query.edit_message_text(msg, parse_mode='Markdown')
         return None
         

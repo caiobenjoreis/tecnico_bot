@@ -92,6 +92,7 @@ def main():
             CommandHandler('producao', comando_producao),
             CommandHandler('consultar', comando_consultar),
             CommandHandler('reparo', comando_reparo),
+            CallbackQueryHandler(admin_callback_handler, pattern='^(admin_broadcast|admin_poll|admin_fix_days)$'),
             CallbackQueryHandler(button_callback)
         ],
         states={
@@ -131,7 +132,7 @@ def main():
             
             # Admin Broadcast
             AGUARDANDO_BROADCAST: [
-                MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL, admin_broadcast_handler)
+                MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL | filters.AUDIO | filters.VOICE, admin_broadcast_handler)
             ],
             AGUARDANDO_CONFIRMACAO_BROADCAST: [CallbackQueryHandler(confirmar_broadcast)],
             
@@ -169,8 +170,8 @@ def main():
     app.add_handler(CommandHandler('reparo', comando_reparo))
     
     # Handler para callbacks de admin (DEVE vir ANTES do ConversationHandler)
-    # Excluímos admin_fix_days para que ele caia no ConversationHandler (pois exige mudança de estado)
-    app.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^(admin_(?!fix_days)|access_|au_)'))
+    # Excluímos admin_broadcast e admin_poll para que sejam processados pelo ConversationHandler
+    app.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^(admin_(?!broadcast|poll|fix_days)|access_|au_)'))
     
     # Conversation Handler (deve vir por último para pegar os callbacks genéricos se não for admin)
     app.add_handler(conv_handler)

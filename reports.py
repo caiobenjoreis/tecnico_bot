@@ -1,5 +1,5 @@
 from datetime import datetime
-from config import TZ, TABELA_FAIXAS
+from config import TZ, TABELA_FAIXAS, PONTOS_SERVICO
 from utils import calcular_pontos, contar_dias_produtivos, obter_faixa_valor, formata_brl
 
 def gerar_texto_producao(instalacoes: list, inicio: datetime, fim: datetime, username: str) -> str:
@@ -71,28 +71,115 @@ def gerar_resumo_progresso(pontos: float) -> str:
             f'🚀 Continue assim!'
         )
 
-def gerar_ranking_texto(instalacoes: list) -> str:
-    """Gera o texto do ranking de técnicos."""
+def gerar_ranking_texto(instalacoes: list, is_admin: bool = False) -> str:
+    """Gera o texto do ranking de técnicos do CICLO ATUAL."""
     if not instalacoes:
         return "❌ Nenhuma instalação registrada ainda."
     
     from collections import defaultdict
-    por_tecnico = defaultdict(int)
+    from utils import ciclo_atual
+    
+    # Pegar apenas instalações do ciclo atual
+    inicio_ciclo, fim_ciclo = ciclo_atual()
+    
+    instalacoes_ciclo = []
     for inst in instalacoes:
+        try:
+            data_inst = datetime.strptime(inst['data'], '%d/%m/%Y %H:%M').replace(tzinfo=TZ)
+            if inicio_ciclo <= data_inst <= fim_ciclo:
+                instalacoes_ciclo.append(inst)
+        except:
+            continue
+    
+    if not instalacoes_ciclo:
+        return (
+            f'🏆 *Ranking do Ciclo Atual*\n'
+            f'📅 {inicio_ciclo.strftime("%d/%m")} a {fim_ciclo.strftime("%d/%m/%Y")}\n\n'
+            f'❌ Nenhuma instalação registrada neste ciclo ainda.'
+        )
+    
+    # Agrupar por técnico
+    por_tecnico = defaultdict(lambda: {'quantidade': 0, 'pontos': 0.0, 'instalacoes': []})
+    
+    for inst in instalacoes_ciclo:
         nome = inst.get('tecnico_nome', 'Desconhecido')
-        por_tecnico[nome] += 1
+        tipo = str(inst.get('tipo', 'instalacao')).lower()
+        pontos = PONTOS_SERVICO.get(tipo, 1.0)
+        
+        por_tecnico[nome]['quantidade'] += 1
+        por_tecnico[nome]['pontos'] += pontos
+        por_tecnico[nome]['instalacoes'].append(inst)
     
-    msg = f'🏆 *Ranking Geral de Técnicos*\n\n'
-    msg += f'📊 *Total Geral:* {len(instalacoes)} instalações\n\n'
+    # Ordenar por pontos
+    tecnicos_ordenados = sorted(
+        por_tecnico.items(), 
+        key=lambda x: x[1]['pontos'], 
+        reverse=True
+    )
     
-    tecnicos_ordenados = sorted(por_tecnico.items(), key=lambda x: x[1], reverse=True)
+    # Calcular totais
+    total_instalacoes = len(instalacoes_ciclo)
+    total_pontos = sum(t[1]['pontos'] for t in tecnicos_ordenados)
+    
+    msg = (
+        f'━━━━━━━━━━━━━━━━━━━━\n'
+        f'🏆 *RANKING DO CICLO*\n'
+        f'━━━━━━━━━━━━━━━━━━━━\n\n'
+        f'📅 *Período:* {inicio_ciclo.strftime("%d/%m")} a {fim_ciclo.strftime("%d/%m/%Y")}\n'
+        f'📊 *Total:* {total_instalacoes} instalações\n'
+    )
+    
+    if is_admin:
+        msg += f'⭐ *Pontos Totais:* {total_pontos:.2f}\n'
+    
+    msg += '\n👥 *TOP TÉCNICOS:*\n'
     
     medals = ['🥇', '🥈', '🥉']
-    for idx, (tecnico, quantidade) in enumerate(tecnicos_ordenados, 1):
+    for idx, (tecnico, dados) in enumerate(tecnicos_ordenados, 1):
         medal = medals[idx-1] if idx <= 3 else f'{idx}º'
-        percentual = (quantidade / len(instalacoes)) * 100
-        msg += f'{medal} *{tecnico}*\n'
-        msg += f'   {quantidade} instalações ({percentual:.1f}%)\n\n'
+        percentual_inst = (dados['quantidade'] / total_instalacoes) * 100
+        
+        if is_admin:
+            # VERSÃO ADMIN - Completa com valores
+            percentual_pts = (dados['pontos'] / total_pontos) * 100
+            
+            # Calcular dias produtivos
+            dias = set()
+            for inst in dados['instalacoes']:
+                try:
+                    dt = datetime.strptime(inst['data'], '%d/%m/%Y %H:%M')
+                    dias.add(dt.date())
+                except:
+                    continue
+            dias_produtivos = len(dias)
+            
+            # Calcular valor estimado
+            turbo_ativo = dias_produtivos >= 24
+            tier = obter_faixa_valor(dados['pontos'])
+            valor_unit = tier['valor_turbo'] if turbo_ativo else tier['valor']
+            valor_estimado = dados['pontos'] * valor_unit
+            
+            msg += f'\n{medal} *{tecnico}*\n'
+            msg += f'   📦 {dados["quantidade"]} inst. ({percentual_inst:.1f}%)\n'
+            msg += f'   ⭐ {dados["pontos"]:.2f} pts ({percentual_pts:.1f}%)\n'
+            msg += f'   📅 {dias_produtivos} dias | Faixa {tier["faixa"]}\n'
+            msg += f'   💰 {formata_brl(valor_estimado)} {"🚀" if turbo_ativo else ""}\n'
+        else:
+            # VERSÃO PÚBLICA - Simples sem valores
+            msg += f'\n{medal} *{tecnico}*\n'
+            msg += f'   📦 {dados["quantidade"]} instalações ({percentual_inst:.1f}%)\n'
+            msg += f'   ⭐ {dados["pontos"]:.2f} pontos\n'
+    
+    # Estatísticas do ciclo
+    dias_decorridos = (datetime.now(TZ) - inicio_ciclo).days + 1
+    media_dia = total_instalacoes / dias_decorridos if dias_decorridos > 0 else 0
+    
+    msg += (
+        f'\n━━━━━━━━━━━━━━━━━━━━\n'
+        f'📈 *Estatísticas:*\n'
+        f'📅 Dias: {dias_decorridos}\n'
+        f'📊 Média: {media_dia:.1f} inst/dia\n'
+    )
     
     return msg
 

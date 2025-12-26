@@ -548,7 +548,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     return ConversationHandler.END
 
 async def admin_broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Recebe a mensagem broadcast e mostra preview com opções"""
+    """Recebe a mensagem broadcast e mostra preview com opções avançadas"""
     user_id = update.message.from_user.id
     
     if not is_admin(user_id):
@@ -573,6 +573,16 @@ async def admin_broadcast_handler(update: Update, context: ContextTypes.DEFAULT_
         broadcast_data['file_id'] = update.message.document.file_id
         broadcast_data['caption'] = update.message.caption or ''
         preview_type = '📄 Documento'
+    elif update.message.audio:
+        broadcast_data['type'] = 'audio'
+        broadcast_data['file_id'] = update.message.audio.file_id
+        broadcast_data['caption'] = update.message.caption or ''
+        preview_type = '🎵 Áudio'
+    elif update.message.voice:
+        broadcast_data['type'] = 'voice'
+        broadcast_data['file_id'] = update.message.voice.file_id
+        broadcast_data['caption'] = update.message.caption or ''
+        preview_type = '🎤 Áudio de Voz'
     elif update.message.text:
         broadcast_data['type'] = 'text'
         broadcast_data['text'] = update.message.text.strip()
@@ -584,28 +594,55 @@ async def admin_broadcast_handler(update: Update, context: ContextTypes.DEFAULT_
     # Armazenar no contexto
     context.user_data['broadcast_data'] = broadcast_data
     
-    # Preview
+    # Estatísticas dos usuários
     users = await db.get_all_users()
-    total = len(users)
+    total_users = len(users)
+    
+    # Contar por status
+    ativos = sum(1 for u in users.values() if u.get('status', 'ativo') == 'ativo')
+    pendentes = sum(1 for u in users.values() if u.get('status') == 'pendente')
+    bloqueados = sum(1 for u in users.values() if u.get('status') == 'bloqueado')
+    
+    # Contar por região
+    regioes = {}
+    for u in users.values():
+        r = u.get('regiao', 'Não informada')
+        regioes[r] = regioes.get(r, 0) + 1
     
     if broadcast_data['type'] == 'text':
-        preview = broadcast_data['text'][:200]
-        if len(broadcast_data['text']) > 200:
+        preview = broadcast_data['text'][:150]
+        if len(broadcast_data['text']) > 150:
             preview += '...'
     else:
-        preview = broadcast_data.get('caption', '(sem legenda)')[:200]
+        preview = broadcast_data.get('caption', '(sem legenda)')[:150]
+        if len(broadcast_data.get('caption', '')) > 150:
+            preview += '...'
     
     msg = (
-        f'📋 *Preview da Mensagem*\n\n'
-        f'Tipo: {preview_type}\n'
-        f'Destinatários: {total} técnicos\n\n'
-        f'*Conteúdo:*\n{preview}\n\n'
-        f'Escolha uma opção:'
+        f'━━━━━━━━━━━━━━━━━━━━\n'
+        f'📢 *ENVIO DE MENSAGEM*\n'
+        f'━━━━━━━━━━━━━━━━━━━━\n\n'
+        f'📋 *Tipo:* {preview_type}\n'
+        f'📊 *Destinatários Totais:* {total_users}\n\n'
+        f'👥 *Por Status:*\n'
+        f'  ✅ Ativos: {ativos}\n'
+        f'  ⏳ Pendentes: {pendentes}\n'
+        f'  ⛔ Bloqueados: {bloqueados}\n\n'
+        f'📍 *Top 3 Regiões:*\n'
     )
     
+    # Mostrar top 3 regiões
+    top_regioes = sorted(regioes.items(), key=lambda x: x[1], reverse=True)[:3]
+    for idx, (regiao, qtd) in enumerate(top_regioes, 1):
+        msg += f'  {idx}. {regiao}: {qtd}\n'
+    
+    msg += f'\n*Preview:*\n_{preview}_\n\n🎯 *Escolha os destinatários:*'
+    
     keyboard = [
-        [InlineKeyboardButton("✅ Enviar para TODOS", callback_data='broadcast_send_all')],
-        [InlineKeyboardButton("🎯 Selecionar Região", callback_data='broadcast_select_region')],
+        [InlineKeyboardButton("👥 TODOS os Técnicos", callback_data='broadcast_send_all')],
+        [InlineKeyboardButton("✅ Apenas ATIVOS", callback_data='broadcast_filter_status_ativo')],
+        [InlineKeyboardButton("📍 Por REGIÃO", callback_data='broadcast_select_region')],
+        [InlineKeyboardButton("🔔 Opções Avançadas", callback_data='broadcast_advanced_options')],
         [InlineKeyboardButton("❌ Cancelar", callback_data='broadcast_cancel')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -614,7 +651,7 @@ async def admin_broadcast_handler(update: Update, context: ContextTypes.DEFAULT_
     return AGUARDANDO_CONFIRMACAO_BROADCAST
 
 async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Executa o broadcast após confirmação"""
+    """Executa o broadcast após confirmação com opções avançadas"""
     query = update.callback_query
     user_id = query.from_user.id
     
@@ -627,56 +664,194 @@ async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE
     if query.data == 'broadcast_cancel':
         await query.edit_message_text('❌ Broadcast cancelado.')
         context.user_data.pop('broadcast_data', None)
+        context.user_data.pop('broadcast_options', None)
         return ConversationHandler.END
+    
+    # Opções Avançadas
+    if query.data == 'broadcast_advanced_options':
+        keyboard = [
+            [InlineKeyboardButton("🔕 Notificação Silenciosa", callback_data='broadcast_opt_silent')],
+            [InlineKeyboardButton("📌 Fixar Mensagem", callback_data='broadcast_opt_pin')],
+            [InlineKeyboardButton("🔔 Notificação Normal", callback_data='broadcast_opt_normal')],
+            [InlineKeyboardButton("🔙 Voltar", callback_data='broadcast_back_to_preview')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            '🔔 *Opções de Notificação*\n\n'
+            'Escolha como a mensagem será enviada:\n\n'
+            '🔕 *Silenciosa:* Sem som de notificação\n'
+            '📌 *Fixada:* Será fixada no chat\n'
+            '🔔 *Normal:* Com notificação padrão',
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_CONFIRMACAO_BROADCAST
+    
+    # Voltar ao preview
+    if query.data == 'broadcast_back_to_preview':
+        # Recriar o preview
+        broadcast_data = context.user_data.get('broadcast_data', {})
+        users = await db.get_all_users()
+        total_users = len(users)
+        
+        ativos = sum(1 for u in users.values() if u.get('status', 'ativo') == 'ativo')
+        pendentes = sum(1 for u in users.values() if u.get('status') == 'pendente')
+        bloqueados = sum(1 for u in users.values() if u.get('status') == 'bloqueado')
+        
+        preview_type = {
+            'text': '📝 Texto',
+            'photo': '📷 Foto',
+            'video': '🎥 Vídeo',
+            'document': '📄 Documento',
+            'audio': '🎵 Áudio',
+            'voice': '🎤 Áudio de Voz'
+        }.get(broadcast_data.get('type'), '❓ Desconhecido')
+        
+        if broadcast_data.get('type') == 'text':
+            preview = broadcast_data.get('text', '')[:150]
+        else:
+            preview = broadcast_data.get('caption', '(sem legenda)')[:150]
+        
+        msg = (
+            f'━━━━━━━━━━━━━━━━━━━━\n'
+            f'📢 *ENVIO DE MENSAGEM*\n'
+            f'━━━━━━━━━━━━━━━━━━━━\n\n'
+            f'📋 *Tipo:* {preview_type}\n'
+            f'📊 *Destinatários Totais:* {total_users}\n\n'
+            f'👥 *Por Status:*\n'
+            f'  ✅ Ativos: {ativos}\n'
+            f'  ⏳ Pendentes: {pendentes}\n'
+            f'  ⛔ Bloqueados: {bloqueados}\n\n'
+            f'*Preview:*\n_{preview}_\n\n🎯 *Escolha os destinatários:*'
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("👥 TODOS os Técnicos", callback_data='broadcast_send_all')],
+            [InlineKeyboardButton("✅ Apenas ATIVOS", callback_data='broadcast_filter_status_ativo')],
+            [InlineKeyboardButton("📍 Por REGIÃO", callback_data='broadcast_select_region')],
+            [InlineKeyboardButton("🔔 Opções Avançadas", callback_data='broadcast_advanced_options')],
+            [InlineKeyboardButton("❌ Cancelar", callback_data='broadcast_cancel')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+        return AGUARDANDO_CONFIRMACAO_BROADCAST
+    
+    # Configurar opções de envio
+    if query.data.startswith('broadcast_opt_'):
+        opt_type = query.data.replace('broadcast_opt_', '')
+        context.user_data['broadcast_options'] = {
+            'silent': opt_type == 'silent',
+            'pin': opt_type == 'pin',
+            'normal': opt_type == 'normal'
+        }
+        
+        opt_name = {
+            'silent': '🔕 Silenciosa',
+            'pin': '📌 Fixada',
+            'normal': '🔔 Normal'
+        }.get(opt_type, 'Normal')
+        
+        keyboard = [
+            [InlineKeyboardButton("👥 TODOS os Técnicos", callback_data='broadcast_send_all')],
+            [InlineKeyboardButton("✅ Apenas ATIVOS", callback_data='broadcast_filter_status_ativo')],
+            [InlineKeyboardButton("📍 Por REGIÃO", callback_data='broadcast_select_region')],
+            [InlineKeyboardButton("🔙 Voltar", callback_data='broadcast_back_to_preview')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f'✅ *Opção Selecionada:* {opt_name}\n\n'
+            f'🎯 Agora escolha os destinatários:',
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_CONFIRMACAO_BROADCAST
         
     if query.data == 'broadcast_select_region':
         # Listar regiões disponíveis
         users = await db.get_all_users()
-        regioes = set()
+        regioes = {}
         for u in users.values():
             r = u.get('regiao')
-            if r: regioes.add(r)
+            if r:
+                status = u.get('status', 'ativo')
+                if r not in regioes:
+                    regioes[r] = {'total': 0, 'ativos': 0}
+                regioes[r]['total'] += 1
+                if status == 'ativo':
+                    regioes[r]['ativos'] += 1
             
         if not regioes:
             await query.edit_message_text('❌ Nenhuma região encontrada.')
             return ConversationHandler.END
             
         keyboard = []
-        for reg in sorted(regioes):
-            keyboard.append([InlineKeyboardButton(f"📍 {reg}", callback_data=f'broadcast_region_{reg}')])
-        keyboard.append([InlineKeyboardButton("🔙 Voltar", callback_data='broadcast_back')])
+        for reg in sorted(regioes.keys()):
+            stats = regioes[reg]
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"📍 {reg} ({stats['ativos']}/{stats['total']})", 
+                    callback_data=f'broadcast_region_{reg}'
+                )
+            ])
+        keyboard.append([InlineKeyboardButton("🔙 Voltar", callback_data='broadcast_back_to_preview')])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text('🎯 Selecione a região alvo:', reply_markup=reply_markup)
+        await query.edit_message_text(
+            '🎯 *Selecione a região alvo:*\n\n'
+            '_(Mostrando: ativos/total)_',
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
         return AGUARDANDO_CONFIRMACAO_BROADCAST
 
     if query.data == 'broadcast_back':
         await query.edit_message_text('🔙 Operação cancelada. Envie o comando novamente.')
         return ConversationHandler.END
 
-    # Definir alvos
+    # Definir alvos e filtros
     users = await db.get_all_users()
     target_users = []
+    filter_description = ""
     
-    if query.data == 'broadcast_send_all' or query.data == 'broadcast_send_pin': # Mantendo compatibilidade com pin se quiser reativar
+    # Filtro por status
+    if query.data == 'broadcast_filter_status_ativo':
+        target_users = [uid for uid, u in users.items() if u.get('status', 'ativo') == 'ativo']
+        filter_description = "✅ Apenas técnicos ATIVOS"
+    elif query.data == 'broadcast_send_all':
         target_users = list(users.keys())
-        pin_message = (query.data == 'broadcast_send_pin')
+        filter_description = "👥 TODOS os técnicos"
     elif query.data.startswith('broadcast_region_'):
         region = query.data.replace('broadcast_region_', '')
         target_users = [uid for uid, u in users.items() if u.get('regiao') == region]
-        pin_message = False
+        filter_description = f"📍 Região: {region}"
     else:
         # Fallback
         target_users = list(users.keys())
-        pin_message = False
+        filter_description = "👥 TODOS os técnicos"
     
     broadcast_data = context.user_data.get('broadcast_data')
+    broadcast_options = context.user_data.get('broadcast_options', {})
     
     if not broadcast_data:
         await query.edit_message_text('❌ Erro: dados não encontrados.')
         return ConversationHandler.END
     
-    await query.edit_message_text(f'📤 Enviando para {len(target_users)} técnicos...')
+    # Configurações de envio
+    pin_message = broadcast_options.get('pin', False)
+    silent_notification = broadcast_options.get('silent', False)
+    
+    # Mensagem inicial de progresso
+    progress_msg = await query.edit_message_text(
+        f'━━━━━━━━━━━━━━━━━━━━\n'
+        f'📤 *ENVIANDO MENSAGEM*\n'
+        f'━━━━━━━━━━━━━━━━━━━━\n\n'
+        f'🎯 Filtro: {filter_description}\n'
+        f'👥 Total: {len(target_users)} técnicos\n\n'
+        f'⏳ Iniciando envio...\n'
+        f'📊 Progresso: 0/{len(target_users)} (0%)',
+        parse_mode='Markdown'
+    )
     
     header = '📢 *AVISO DA ADMINISTRAÇÃO*\n━━━━━━━━━━━━━━━━━━━━\n\n'
     footer = '\n\n━━━━━━━━━━━━━━━━━━━━'
@@ -684,17 +859,23 @@ async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE
     enviados = 0
     falhas = 0
     fixados = 0
+    falhas_detalhadas = []
+    sucessos_detalhados = []
+    nunca_iniciaram = 0
     
-    for uid in target_users:
+    for idx, uid in enumerate(target_users, 1):
         try:
             message_sent = None
+            user_data = users.get(uid, {})
+            user_name = f"{user_data.get('nome', '')} {user_data.get('sobrenome', '')}".strip() or f"ID {uid}"
             
             if broadcast_data['type'] == 'text':
                 msg = header + broadcast_data['text'] + footer
                 message_sent = await context.bot.send_message(
                     chat_id=int(uid),
                     text=msg,
-                    parse_mode='Markdown'
+                    parse_mode='Markdown',
+                    disable_notification=silent_notification
                 )
             elif broadcast_data['type'] == 'photo':
                 caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
@@ -702,7 +883,8 @@ async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE
                     chat_id=int(uid),
                     photo=broadcast_data['file_id'],
                     caption=caption,
-                    parse_mode='Markdown'
+                    parse_mode='Markdown',
+                    disable_notification=silent_notification
                 )
             elif broadcast_data['type'] == 'video':
                 caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
@@ -710,7 +892,8 @@ async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE
                     chat_id=int(uid),
                     video=broadcast_data['file_id'],
                     caption=caption,
-                    parse_mode='Markdown'
+                    parse_mode='Markdown',
+                    disable_notification=silent_notification
                 )
             elif broadcast_data['type'] == 'document':
                 caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
@@ -718,10 +901,29 @@ async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE
                     chat_id=int(uid),
                     document=broadcast_data['file_id'],
                     caption=caption,
-                    parse_mode='Markdown'
+                    parse_mode='Markdown',
+                    disable_notification=silent_notification
+                )
+            elif broadcast_data['type'] == 'audio':
+                caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
+                message_sent = await context.bot.send_audio(
+                    chat_id=int(uid),
+                    audio=broadcast_data['file_id'],
+                    caption=caption,
+                    parse_mode='Markdown',
+                    disable_notification=silent_notification
+                )
+            elif broadcast_data['type'] == 'voice':
+                message_sent = await context.bot.send_voice(
+                    chat_id=int(uid),
+                    voice=broadcast_data['file_id'],
+                    caption=broadcast_data.get('caption', ''),
+                    parse_mode='Markdown',
+                    disable_notification=silent_notification
                 )
             
             enviados += 1
+            sucessos_detalhados.append(user_name)
             
             if pin_message and message_sent:
                 try:
@@ -731,37 +933,106 @@ async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE
                         disable_notification=True
                     )
                     fixados += 1
-                except:
-                    pass
+                except Exception as pin_error:
+                    logger.warning(f"Não foi possível fixar mensagem para {uid}: {pin_error}")
+                    
         except RetryAfter as e:
             await asyncio.sleep(e.retry_after)
             # Tentar novamente após o tempo de espera
             try:
                 if broadcast_data['type'] == 'text':
                     msg = header + broadcast_data['text'] + footer
-                    await context.bot.send_message(chat_id=int(uid), text=msg, parse_mode='Markdown')
+                    await context.bot.send_message(
+                        chat_id=int(uid), 
+                        text=msg, 
+                        parse_mode='Markdown',
+                        disable_notification=silent_notification
+                    )
                 enviados += 1
-            except:
+                sucessos_detalhados.append(user_name)
+            except Exception as retry_error:
                 falhas += 1
+                error_msg = str(retry_error).lower()
+                if "chat not found" in error_msg:
+                    nunca_iniciaram += 1
+                    falhas_detalhadas.append(f"{user_name}: Nunca iniciou o bot")
+                else:
+                    falhas_detalhadas.append(f"{user_name}: {str(retry_error)[:50]}")
         except Exception as e:
             falhas += 1
+            error_msg = str(e).lower()
+            
+            if "bot was blocked" in error_msg:
+                falhas_detalhadas.append(f"{user_name}: Bloqueou o bot")
+            elif "chat not found" in error_msg:
+                nunca_iniciaram += 1
+                falhas_detalhadas.append(f"{user_name}: Nunca iniciou o bot")
+            else:
+                falhas_detalhadas.append(f"{user_name}: {str(e)[:50]}")
+        
+        # Atualizar progresso a cada 10 envios ou no último
+        if idx % 10 == 0 or idx == len(target_users):
+            percentual = int((idx / len(target_users)) * 100)
+            barra_progresso = "█" * (percentual // 5) + "░" * (20 - percentual // 5)
+            
+            try:
+                await progress_msg.edit_text(
+                    f'━━━━━━━━━━━━━━━━━━━━\n'
+                    f'📤 *ENVIANDO MENSAGEM*\n'
+                    f'━━━━━━━━━━━━━━━━━━━━\n\n'
+                    f'🎯 Filtro: {filter_description}\n'
+                    f'👥 Total: {len(target_users)} técnicos\n\n'
+                    f'📊 Progresso: {idx}/{len(target_users)} ({percentual}%)\n'
+                    f'{barra_progresso}\n\n'
+                    f'✅ Enviados: {enviados}\n'
+                    f'❌ Falhas: {falhas}',
+                    parse_mode='Markdown'
+                )
+            except Exception:
+                pass  # Ignora erro de edição muito rápida
         
         # Pequeno delay para evitar flood
         await asyncio.sleep(0.05)
     
+    # Relatório final detalhado
     relatorio = (
-        f'✅ *Broadcast Concluído!*\n\n'
+        f'━━━━━━━━━━━━━━━━━━━━\n'
+        f'✅ *ENVIO CONCLUÍDO!*\n'
+        f'━━━━━━━━━━━━━━━━━━━━\n\n'
+        f'🎯 *Filtro:* {filter_description}\n\n'
         f'📊 *Estatísticas:*\n'
         f'✅ Enviados: {enviados}\n'
         f'❌ Falhas: {falhas}\n'
         f'👥 Total Alvo: {len(target_users)}\n'
+        f'📈 Taxa de Sucesso: {int((enviados/len(target_users)*100)) if target_users else 0}%\n'
     )
     
     if pin_message:
         relatorio += f'📌 Fixadas: {fixados}\n'
     
-    await query.edit_message_text(relatorio, parse_mode='Markdown')
+    if silent_notification:
+        relatorio += f'🔕 Modo: Silencioso\n'
+    
+    # Adicionar nota sobre usuários que nunca iniciaram
+    if nunca_iniciaram > 0:
+        relatorio += f'\n⚠️ *Atenção:*\n'
+        relatorio += f'📱 {nunca_iniciaram} usuário(s) nunca iniciaram conversa com o bot.\n'
+        relatorio += f'💡 _Peça para eles enviarem /start no bot primeiro._\n'
+    
+    # Adicionar detalhes de falhas se houver
+    if falhas_detalhadas and len(falhas_detalhadas) <= 10:
+        relatorio += f'\n❌ *Falhas Detalhadas:*\n'
+        for falha in falhas_detalhadas[:10]:
+            relatorio += f'  • {falha}\n'
+    elif falhas_detalhadas:
+        relatorio += f'\n❌ *Primeiras 10 Falhas:*\n'
+        for falha in falhas_detalhadas[:10]:
+            relatorio += f'  • {falha}\n'
+        relatorio += f'\n_...e mais {len(falhas_detalhadas) - 10} falhas_'
+    
+    await progress_msg.edit_text(relatorio, parse_mode='Markdown')
     context.user_data.pop('broadcast_data', None)
+    context.user_data.pop('broadcast_options', None)
     return ConversationHandler.END
 
 async def admin_poll_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
