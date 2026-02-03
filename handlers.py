@@ -325,7 +325,7 @@ async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
         if update.callback_query.data not in ['gerar_mascara', 'skip_photo']:
             return AGUARDANDO_FOTO_MASCARA
             
-    # Processar
+    # Processar OCR
     from utils import extrair_dados_completos
     
     imgs = context.user_data.get('fotos_mascara', [])
@@ -345,13 +345,185 @@ async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
         except:
             pass
     
-    tipo = context.user_data.get('tipo_mascara')
-    texto_final = ""
+    # Salvar dados extraídos
+    context.user_data['dados_mascara'] = dados
     
-    # Helpers para pegar dados ou vazio
-    def get(key, default=""): return dados.get(key, default)
+    # Agora perguntar informações complementares baseado no tipo
+    tipo = context.user_data.get('tipo_mascara')
     
     if tipo == 'Batimento CDOE':
+        await (update.callback_query.message if update.callback_query else update.message).reply_text(
+            '📝 *Informações Complementares*\n\n'
+            'Digite as *Observações* (ou envie "-" se não houver):',
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_OBS_BATIMENTO
+        
+    elif tipo == 'Pendência':
+        keyboard = [
+            [InlineKeyboardButton("📦 Falta Material", callback_data='pend_falta_material')],
+            [InlineKeyboardButton("👤 Cliente Ausente", callback_data='pend_cliente_ausente')],
+            [InlineKeyboardButton("⚠️ Problema Técnico", callback_data='pend_problema_tecnico')],
+            [InlineKeyboardButton("🔧 Infraestrutura", callback_data='pend_infraestrutura')],
+            [InlineKeyboardButton("📋 Outro", callback_data='pend_outro')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await (update.callback_query.message if update.callback_query else update.message).reply_text(
+            '📝 *Informações Complementares*\n\n'
+            'Selecione o *Tipo de Pendência*:',
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_TIPO_PENDENCIA
+        
+    elif tipo == 'Cancelamento':
+        keyboard = [
+            [InlineKeyboardButton("🚫 Cliente Desistiu", callback_data='canc_cliente_desistiu')],
+            [InlineKeyboardButton("📡 Área sem Cobertura", callback_data='canc_sem_cobertura')],
+            [InlineKeyboardButton("💰 Problema Financeiro", callback_data='canc_financeiro')],
+            [InlineKeyboardButton("⏰ Cliente não Aguardou", callback_data='canc_nao_aguardou')],
+            [InlineKeyboardButton("📋 Outro", callback_data='canc_outro')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await (update.callback_query.message if update.callback_query else update.message).reply_text(
+            '📝 *Informações Complementares*\n\n'
+            'Selecione o *Motivo do Cancelamento*:',
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_MOTIVO_CANCELAMENTO
+        
+    elif tipo == 'Repasse':
+        await (update.callback_query.message if update.callback_query else update.message).reply_text(
+            '📝 *Informações Complementares*\n\n'
+            'Digite a *Cidade*:',
+            parse_mode='Markdown'
+        )
+        return AGUARDANDO_CIDADE_REPASSE
+    
+    # Fallback (não deveria chegar aqui)
+    return ConversationHandler.END
+
+# ==================== HANDLERS DE DADOS COMPLEMENTARES DAS MÁSCARAS ====================
+
+async def receber_obs_batimento(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    obs = update.message.text.strip()
+    if obs == '-':
+        obs = ''
+    context.user_data['obs_batimento'] = obs
+    return await gerar_mascara_final(update, context)
+
+async def receber_tipo_pendencia(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    tipo_map = {
+        'pend_falta_material': 'Falta Material',
+        'pend_cliente_ausente': 'Cliente Ausente',
+        'pend_problema_tecnico': 'Problema Técnico',
+        'pend_infraestrutura': 'Infraestrutura',
+        'pend_outro': 'Outro'
+    }
+    
+    tipo_pendencia = tipo_map.get(query.data, 'Outro')
+    context.user_data['tipo_pendencia'] = tipo_pendencia
+    
+    await query.edit_message_text(
+        f'✅ Tipo: *{tipo_pendencia}*\n\n'
+        'Agora digite as *Observações* detalhadas (ou "-" se não houver):',
+        parse_mode='Markdown'
+    )
+    return AGUARDANDO_OBS_PENDENCIA
+
+async def receber_obs_pendencia(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    obs = update.message.text.strip()
+    if obs == '-':
+        obs = ''
+    context.user_data['obs_pendencia'] = obs
+    return await gerar_mascara_final(update, context)
+
+async def receber_motivo_cancelamento(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    motivo_map = {
+        'canc_cliente_desistiu': 'Cliente Desistiu',
+        'canc_sem_cobertura': 'Área sem Cobertura',
+        'canc_financeiro': 'Problema Financeiro',
+        'canc_nao_aguardou': 'Cliente não Aguardou',
+        'canc_outro': 'Outro'
+    }
+    
+    motivo = motivo_map.get(query.data, 'Outro')
+    context.user_data['motivo_cancelamento'] = motivo
+    
+    return await gerar_mascara_final(update, context)
+
+async def receber_cidade_repasse(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cidade = update.message.text.strip().upper()
+    context.user_data['cidade_repasse'] = cidade
+    
+    keyboard = [
+        [InlineKeyboardButton("📱 Vivo", callback_data='oper_vivo')],
+        [InlineKeyboardButton("📱 Claro", callback_data='oper_claro')],
+        [InlineKeyboardButton("📱 Tim", callback_data='oper_tim')],
+        [InlineKeyboardButton("📱 Oi", callback_data='oper_oi')],
+        [InlineKeyboardButton("📱 Outro", callback_data='oper_outro')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        f'✅ Cidade: *{cidade}*\n\n'
+        'Selecione a *Operadora*:',
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    return AGUARDANDO_OPERADORA_REPASSE
+
+async def receber_operadora_repasse(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    oper_map = {
+        'oper_vivo': 'VIVO',
+        'oper_claro': 'CLARO',
+        'oper_tim': 'TIM',
+        'oper_oi': 'OI',
+        'oper_outro': 'OUTRO'
+    }
+    
+    operadora = oper_map.get(query.data, 'OUTRO')
+    context.user_data['operadora_repasse'] = operadora
+    
+    await query.edit_message_text(
+        f'✅ Operadora: *{operadora}*\n\n'
+        'Digite as *Observações* (ou "-" se não houver):',
+        parse_mode='Markdown'
+    )
+    return AGUARDANDO_OBS_REPASSE
+
+async def receber_obs_repasse(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    obs = update.message.text.strip()
+    if obs == '-':
+        obs = ''
+    context.user_data['obs_repasse'] = obs
+    return await gerar_mascara_final(update, context)
+
+# ==================== GERAÇÃO FINAL DA MÁSCARA ====================
+
+async def gerar_mascara_final(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gera a máscara final com todos os dados coletados"""
+    
+    dados = context.user_data.get('dados_mascara', {})
+    tipo = context.user_data.get('tipo_mascara')
+    
+    # Helper para pegar dados ou vazio
+    def get(key, default=""): return dados.get(key, default)
+    
+    texto_final = ""
+    
+    if tipo == 'Batimento CDOE':
+        obs = context.user_data.get('obs_batimento', '')
         texto_final = (
             "Máscara Batimento CDOE\n\n"
             f"ATIVIDADE: {get('atividade')}\n"
@@ -359,10 +531,12 @@ async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
             f"CDOE: {get('cdo')}\n"
             f"PORTA CLIENTE: {get('porta')}\n"
             f"ACESSO GPON: {get('gpon')}\n"
-            "OBS: "
+            f"OBS: {obs}"
         )
         
     elif tipo == 'Pendência':
+        tipo_pend = context.user_data.get('tipo_pendencia', '')
+        obs = context.user_data.get('obs_pendencia', '')
         texto_final = (
             "Máscara de Pendência!\n\n"
             f"Tipo de serviço: {get('atividade')}\n"
@@ -372,25 +546,30 @@ async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
             f"Cliente: {get('cliente')}\n"
             f"Contato: {get('telefone')}\n"
             f"Endereço: {get('endereco')}\n"
-            "Tipo de pendência: \n"
-            "Obs: "
+            f"Tipo de pendência: {tipo_pend}\n"
+            f"Obs: {obs}"
         )
         
     elif tipo == 'Cancelamento':
+        motivo = context.user_data.get('motivo_cancelamento', '')
         texto_final = (
             "Máscara de cancelamento:\n\n"
             f"Pedido: {get('sa')}\n"
             f"Doc: {get('documento')}\n"
             f"Telefone: {get('telefone')}\n"
             f"Nome: {get('cliente')}\n"
-            "Motivo do cancelamento: "
+            f"Motivo do cancelamento: {motivo}"
         )
         
     elif tipo == 'Repasse':
-        # Tentar pegar dados do usuário logado para o campo TECNICO
+        # Pegar dados do usuário logado para o campo TECNICO
         user_id = update.effective_user.id
         db_user = await db.get_user(str(user_id))
         tecnico_nome = f"{db_user.get('nome','')} {db_user.get('sobrenome','')}".strip() if db_user else ""
+        
+        cidade = context.user_data.get('cidade_repasse', '')
+        operadora = context.user_data.get('operadora_repasse', '')
+        obs = context.user_data.get('obs_repasse', '')
         
         texto_final = (
             "MASCARA REPASSE\n\n"
@@ -401,18 +580,18 @@ async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
             f"🚨 CDO: {get('cdo')}\n\n"
             f"🚨PORTA: {get('porta')}\n\n"
             f"🚨ENDERECO: {get('endereco')}\n\n"
-            "🚨CIDADE: \n\n"
+            f"🚨CIDADE: {cidade}\n\n"
             f"🚨CLIENTE: {get('cliente')}\n\n"
             f"🚨CONTATO: {get('telefone')}\n\n"
-            "🚨OPERADORA: \n\n"
+            f"🚨OPERADORA: {operadora}\n\n"
             f"🚨TECNICO: {tecnico_nome}\n\n"
-            "🚨OBS: "
+            f"🚨OBS: {obs}"
         )
 
-    msg = f"✅ *Máscara Gerada:*\n\n```\n{texto_final}\n```\n\n👆 _Toque para copiar_"
+    msg = f"✅ *Máscara Gerada com Sucesso!*\n\n```\n{texto_final}\n```\n\n👆 _Toque para copiar_"
     
+    # Enviar a máscara
     if update.callback_query:
-        # Tenta apagar a mensagem do botão "Gerar" para limpar o chat
         try:
             await update.callback_query.message.delete()
         except:
@@ -420,10 +599,23 @@ async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode='Markdown')
     else:
         await update.message.reply_text(msg, parse_mode='Markdown')
-        
-    # Retorna ao menu principal (enviando nova mensagem)
+    
+    # Limpar dados temporários
+    context.user_data.pop('fotos_mascara', None)
+    context.user_data.pop('dados_mascara', None)
+    context.user_data.pop('tipo_mascara', None)
+    context.user_data.pop('obs_batimento', None)
+    context.user_data.pop('tipo_pendencia', None)
+    context.user_data.pop('obs_pendencia', None)
+    context.user_data.pop('motivo_cancelamento', None)
+    context.user_data.pop('cidade_repasse', None)
+    context.user_data.pop('operadora_repasse', None)
+    context.user_data.pop('obs_repasse', None)
+    
+    # Retorna ao menu principal
     await exibir_menu_principal(update, context, update.effective_user.first_name, new_message=True)
     return ConversationHandler.END
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -1174,7 +1366,7 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto_busca = update.message.text.strip()
     
-    # Buscar TODAS as instalações (como no original)
+    # Buscar TODAS as instalações
     insts = await db.get_installations(limit=5000)
     
     # Busca em memória (substring match)
@@ -1194,42 +1386,71 @@ async def consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
     
+    # Limitar resultados para evitar spam
+    MAX_RESULTADOS = 5
+    total = len(resultados)
+    
+    if total > MAX_RESULTADOS:
+        await update.message.reply_text(
+            f'🔍 Encontradas *{total} instalações*\n'
+            f'Mostrando as primeiras {MAX_RESULTADOS}.\n'
+            f'💡 _Seja mais específico para refinar a busca._',
+            parse_mode='Markdown'
+        )
+        resultados = resultados[:MAX_RESULTADOS]
+    
     for resultado in resultados:
-        # Escapar caracteres especiais para MarkdownV2
-        def escape_md(text):
-            if text is None:
-                return 'N/A'
-            special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
-            text = str(text)
-            for char in special_chars:
-                text = text.replace(char, f'\\{char}')
-            return text
+        # Construir mensagem com Markdown simples
+        tipo = resultado.get('tipo', 'instalacao').replace('_', ' ').title()
+        tecnico = resultado.get('tecnico_nome', 'N/A')
+        data = resultado.get('data', 'N/A')
+        serial = resultado.get('serial_modem', '')
+        mesh_list = resultado.get('mesh', [])
         
-        msg_parts = [
-            f'📋 *SA:* `{resultado["sa"]}`\n',
+        msg = (
+            f'📋 *SA:* `{resultado["sa"]}`\n'
             f'🔗 *GPON:* `{resultado["gpon"]}`\n'
-        ]
+        )
         
-        if resultado.get("serial_modem"):
-            msg_parts.append(f'📟 *Serial:* `{resultado["serial_modem"]}`\n')
+        if serial:
+            msg += f'📟 *Serial Modem:* `{serial}`\n'
         
-        msg_parts.extend([
-            f'🧩 *Tipo:* {escape_md(resultado.get("tipo", "instalacao"))}\n',
-            f'👤 *Técnico:* {escape_md(resultado["tecnico_nome"])}\n',
-            f'📅 *Data:* {escape_md(resultado["data"])}\n',
+        if mesh_list:
+            mesh_text = ', '.join([f'`{m}`' for m in mesh_list[:3]])
+            if len(mesh_list) > 3:
+                mesh_text += f' (+{len(mesh_list)-3})'
+            msg += f'📶 *Mesh:* {mesh_text}\n'
+        
+        msg += (
+            f'🧩 *Tipo:* {tipo}\n'
+            f'👤 *Técnico:* {tecnico}\n'
+            f'📅 *Data:* {data}\n'
             f'📸 *Fotos:* {len(resultado.get("fotos", []))}'
-        ])
+        )
         
-        msg = ''.join(msg_parts)
-        await update.message.reply_text(msg, parse_mode='MarkdownV2')
+        try:
+            await update.message.reply_text(msg, parse_mode='Markdown')
+        except Exception as e:
+            logger.error(f"Erro ao enviar mensagem de consulta: {e}")
+            # Fallback sem formatação
+            await update.message.reply_text(
+                f'SA: {resultado["sa"]}\n'
+                f'GPON: {resultado["gpon"]}\n'
+                f'Tipo: {tipo}\n'
+                f'Técnico: {tecnico}\n'
+                f'Data: {data}'
+            )
         
-        # Enviar as fotos (COMO NO ORIGINAL)
-        for foto_id in resultado.get('fotos', []):
-            try:
-                await update.message.reply_photo(photo=foto_id)
-            except:
-                pass
-                
+        # Enviar as fotos
+        fotos = resultado.get('fotos', [])
+        if fotos:
+            # Enviar no máximo 3 fotos por consulta
+            for foto_id in fotos[:3]:
+                try:
+                    await update.message.reply_photo(photo=foto_id)
+                except Exception as e:
+                    logger.error(f"Erro ao enviar foto: {e}")
+                    
     return ConversationHandler.END
 
 async def comando_consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):

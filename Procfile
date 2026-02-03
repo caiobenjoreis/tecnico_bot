@@ -1,1 +1,1 @@
-web: python tecnico_bot
+web: python start.py
