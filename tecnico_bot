@@ -204,7 +204,7 @@ def main():
         fallbacks=[
             CommandHandler('cancelar', cancelar)
         ],
-        per_message=True,  # Corrigido: True para rastrear callbacks por mensagem
+        per_message=False,
         per_chat=True,
         per_user=True,
         allow_reentry=True
@@ -233,7 +233,7 @@ def main():
     logger.info("🤖 BOT TÉCNICO INICIADO COM SUCESSO!")
     logger.info("="*60)
     logger.info(f"📊 Modo: Produção (Render)")
-    logger.info(f"🔧 ConversationHandler: Configurado com per_message=True")
+    logger.info(f"🔧 ConversationHandler: Otimizado")
     logger.info(f"🌐 Servidor web: Ativo")
     logger.info("="*60)
     
@@ -247,11 +247,7 @@ def main():
         logger.info("🔄 Iniciando polling...")
         app.run_polling(
             drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES,
-            pool_timeout=30,
-            read_timeout=30,
-            write_timeout=30,
-            connect_timeout=30
+            allowed_updates=Update.ALL_TYPES
         )
     except Conflict:
         logger.error("="*60)
