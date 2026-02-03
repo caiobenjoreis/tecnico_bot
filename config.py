@@ -1,22 +1,36 @@
 import os
+import logging
 from zoneinfo import ZoneInfo
+
+# Configurar logger
+logger = logging.getLogger(__name__)
 
 # Configurações de Fuso Horário
 TZ = ZoneInfo("America/Sao_Paulo")
 
-# Configurações do Supabase
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# Configurações do Supabase com validação
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 USE_SUPABASE = bool(SUPABASE_URL and SUPABASE_KEY)
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = os.getenv("GROQ_MODEL") or "meta-llama/llama-4-scout-17b-16e-instruct"
+if not USE_SUPABASE:
+    logger.warning("⚠️ Supabase não configurado! Algumas funcionalidades estarão limitadas.")
+
+# Configurações Groq com validação
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 USE_GROQ = bool(GROQ_API_KEY)
 
-# IDs de Administradores
-ADMIN_IDS = [
-    1797158471,  # Admin principal
-]
+if not USE_GROQ:
+    logger.warning("⚠️ Groq API não configurada! OCR automático não funcionará.")
+
+# IDs de Administradores - Agora vem do .env
+ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "1797158471")
+ADMIN_IDS = [int(id.strip()) for id in ADMIN_IDS_STR.split(",") if id.strip().isdigit()]
+
+if not ADMIN_IDS:
+    logger.error("❌ ADMIN_IDS não configurado corretamente!")
+    ADMIN_IDS = [1797158471]  # Fallback
 
 # Estados da Conversa (ConversationHandler)
 (

@@ -1,5 +1,6 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, constants, InputMediaPhoto
 from telegram.ext import ContextTypes, ConversationHandler
+from typing import Tuple, Optional, List, Dict, Any
 from config import *
 from database import db
 from datetime import datetime
@@ -23,7 +24,7 @@ TIPOS_AMBIGUOS = ['mudanca_endereco', 'servicos', 'servico']
 
 # ==================== HELPER FUNCTIONS ====================
 
-async def verificar_acesso_usuario(user_id: int) -> tuple[bool, str]:
+async def verificar_acesso_usuario(user_id: int) -> Tuple[bool, str]:
     """
     Verifica se o usuário tem acesso ao bot.
     Retorna (tem_acesso, mensagem_erro)
@@ -578,8 +579,13 @@ async def meu_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f'🆔 Seu ID: `{user_id}`', parse_mode='Markdown')
 
 async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Limpar TODOS os dados temporários
     context.user_data.clear()
-    await update.message.reply_text('❌ Operação cancelada. Use /start para voltar ao menu.')
+    logger.info(f"Operação cancelada e memória limpa para usuário {update.effective_user.id}")
+    await update.message.reply_text(
+        '❌ Operação cancelada. Memória limpa.\n'
+        'Use /start para voltar ao menu.'
+    )
     return ConversationHandler.END
 
 async def receber_sa(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1160,7 +1166,9 @@ async def finalizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return AGUARDANDO_FOTOS # Mantém no estado para retry
     
+    # Limpar dados temporários para evitar memory leak
     context.user_data.clear()
+    logger.info(f"Memória limpa para usuário {update.effective_user.id}")
     return ConversationHandler.END
 
 async def consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):

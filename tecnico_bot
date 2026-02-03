@@ -56,7 +56,20 @@ def main():
             pass
             
     if not TOKEN:
-        logger.error("TELEGRAM_TOKEN não encontrado!")
+        logger.error("❌ TELEGRAM_TOKEN não encontrado!")
+        logger.error("Configure a variável de ambiente TELEGRAM_TOKEN")
+        return
+    
+    # Validar formato do token
+    if len(TOKEN) < 20:
+        logger.error("❌ TELEGRAM_TOKEN parece inválido (muito curto)")
+        logger.error(f"Token recebido: {TOKEN[:10]}... (truncado)")
+        return
+    
+    # Validar formato básico: deve conter ':'
+    if ':' not in TOKEN:
+        logger.error("❌ TELEGRAM_TOKEN com formato inválido")
+        logger.error("Formato esperado: 123456789:ABCdefGHIjklMNOpqrsTUVwxyz")
         return
 
     # Inicializar App
