@@ -248,9 +248,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await admin_callback_handler(update, context)
         
     elif query.data.startswith('broadcast_'):
-        from admin_handlers import confirmar_broadcast
-        # Este handler é chamado via CallbackQueryHandler específico no main, mas se cair aqui...
-        pass
+        # Se cair aqui, significa que o usuário clicou em um botão de broadcast antigo
+        # e o ConversationHandler não estava mais ativo (memória limpa ou reinício).
+        # Como o broadcast depende de dados na memória (preview), não dá pra continuar.
+        
+        await query.answer("❌ Sessão Expirada", show_alert=True)
+        try:
+            await query.message.reply_text(
+                "❌ *A sessão de envio expirou.*\n\n"
+                "Isso geralmente acontece quando o bot reinicia.\n"
+                "Por favor, use o painel /admin e comece o processo de envio novamente.",
+                parse_mode='Markdown'
+            )
+        except:
+            pass
+        return ConversationHandler.END
 
     return None
 
