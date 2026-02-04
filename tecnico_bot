@@ -26,9 +26,7 @@ from handlers import (
     receber_sa, receber_gpon, receber_tipo, receber_serial, receber_serial_mesh, receber_foto, finalizar, receber_print_autofill, receber_serial_por_foto, receber_serial_mesh_por_foto,
     button_callback, consultar, comando_consultar, comando_reparo, comando_producao,
     comando_mensal, comando_semanal, comando_hoje, receber_data_inicio, receber_data_fim,
-    receber_tipo_mascara, receber_foto_mascara, verificar_troca_ont,
-    receber_obs_batimento, receber_tipo_pendencia, receber_obs_pendencia,
-    receber_motivo_cancelamento, receber_cidade_repasse, receber_operadora_repasse, receber_obs_repasse
+    receber_tipo_mascara, receber_foto_mascara, verificar_troca_ont
 )
 from admin_handlers import (
     admin_panel, admin_callback_handler, admin_broadcast_handler, confirmar_broadcast,
@@ -36,37 +34,15 @@ from admin_handlers import (
     receber_id_tecnico_ajuste, receber_data_ajuste
 )
 
-# Configuração de Logging Aprimorado
-try:
-    import colorlog
-    handler = colorlog.StreamHandler()
-    handler.setFormatter(colorlog.ColoredFormatter(
-        '%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
-        log_colors={
-            'DEBUG': 'cyan',
-            'INFO': 'green',
-            'WARNING': 'yellow',
-            'ERROR': 'red',
-            'CRITICAL': 'red,bg_white',
-        }
-    ))
-    logger = colorlog.getLogger(__name__)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-except ImportError:
-    # Fallback para logging padrão se colorlog não estiver disponível
-    logging.basicConfig(
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        level=logging.INFO,
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    logger = logging.getLogger(__name__)
+# Configuração de Logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# Reduzir nível de log de bibliotecas externas
+# Reduzir nível de log do httpx para evitar mostrar requisições HTTP com token
 logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("telegram").setLevel(logging.WARNING)
 
 def main():
     # Obter token
@@ -80,20 +56,7 @@ def main():
             pass
             
     if not TOKEN:
-        logger.error("❌ TELEGRAM_TOKEN não encontrado!")
-        logger.error("Configure a variável de ambiente TELEGRAM_TOKEN")
-        return
-    
-    # Validar formato do token
-    if len(TOKEN) < 20:
-        logger.error("❌ TELEGRAM_TOKEN parece inválido (muito curto)")
-        logger.error(f"Token recebido: {TOKEN[:10]}... (truncado)")
-        return
-    
-    # Validar formato básico: deve conter ':'
-    if ':' not in TOKEN:
-        logger.error("❌ TELEGRAM_TOKEN com formato inválido")
-        logger.error("Formato esperado: 123456789:ABCdefGHIjklMNOpqrsTUVwxyz")
+        logger.error("TELEGRAM_TOKEN não encontrado!")
         return
 
     # Inicializar App
@@ -114,14 +77,11 @@ def main():
             BotCommand("admin", "Painel Admin")
         ])
         # Verificar banco de dados
-        from keep_alive import update_health_status
         health = await db.check_health()
         if health:
             logger.info("✅ Conexão com Supabase OK!")
-            update_health_status(database_connected=True)
         else:
             logger.warning("❌ Falha na conexão com Supabase!")
-            update_health_status(database_connected=False)
 
     app.post_init = post_init
 
@@ -186,13 +146,6 @@ def main():
                 MessageHandler(filters.PHOTO, receber_foto_mascara),
                 CallbackQueryHandler(receber_foto_mascara) # Para o botão de pular
             ],
-            AGUARDANDO_OBS_BATIMENTO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_obs_batimento)],
-            AGUARDANDO_TIPO_PENDENCIA: [CallbackQueryHandler(receber_tipo_pendencia)],
-            AGUARDANDO_OBS_PENDENCIA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_obs_pendencia)],
-            AGUARDANDO_MOTIVO_CANCELAMENTO: [CallbackQueryHandler(receber_motivo_cancelamento)],
-            AGUARDANDO_CIDADE_REPASSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_cidade_repasse)],
-            AGUARDANDO_OPERADORA_REPASSE: [CallbackQueryHandler(receber_operadora_repasse)],
-            AGUARDANDO_OBS_REPASSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_obs_repasse)],
             
             # Admin Busca User
             AGUARDANDO_BUSCA_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_access_search_handler)],
@@ -204,10 +157,7 @@ def main():
         fallbacks=[
             CommandHandler('cancelar', cancelar)
         ],
-        per_message=False,
-        per_chat=True,
-        per_user=True,
-        allow_reentry=True
+        per_message=False
     )
 
     # Adicionar handlers
@@ -226,50 +176,20 @@ def main():
     # Conversation Handler (deve vir por último para pegar os callbacks genéricos se não for admin)
     app.add_handler(conv_handler)
 
-    # Iniciar servidor web (Render health check)
+    # Iniciar servidor web falso (Render)
     keep_alive()
 
-    logger.info("="*60)
-    logger.info("🤖 BOT TÉCNICO INICIADO COM SUCESSO!")
-    logger.info("="*60)
-    logger.info(f"📊 Modo: Produção (Render)")
-    logger.info(f"🔧 ConversationHandler: Otimizado")
-    logger.info(f"🌐 Servidor web: Ativo")
-    logger.info("="*60)
+    logger.info("🤖 Bot iniciado!")
     
-    from telegram.error import Conflict, NetworkError
-    from keep_alive import update_health_status
-    
+    from telegram.error import Conflict
     try:
-        # Atualizar status antes de iniciar polling
-        update_health_status(bot_running=True)
-        
-        logger.info("🔄 Iniciando polling...")
-        app.run_polling(
-            drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES
-        )
+        app.run_polling(drop_pending_updates=True) # drop_pending_updates ajuda a evitar loops de erro em alguns casos
     except Conflict:
-        logger.error("="*60)
         logger.error("❌ ERRO CRÍTICO: Conflito de Instâncias Detectado!")
-        logger.error("Outra instância deste bot já está rodando.")
+        logger.error("Outra instância deste bot já está rodando (provavelmente no Render ou localmente).")
         logger.error("Encerre a outra instância para que esta possa funcionar.")
-        logger.error("="*60)
-        update_health_status(bot_running=False)
-    except NetworkError as e:
-        logger.error(f"❌ Erro de rede: {e}")
-        logger.warning("🔄 Tentando reconectar...")
-        update_health_status(bot_running=False)
-    except KeyboardInterrupt:
-        logger.info("\n👋 Bot encerrado pelo usuário")
-        update_health_status(bot_running=False)
     except Exception as e:
-        logger.error("="*60)
         logger.error(f"❌ Erro fatal: {e}")
-        logger.error("="*60)
-        update_health_status(bot_running=False)
-        import traceback
-        logger.error(traceback.format_exc())
 
 if __name__ == '__main__':
     main()

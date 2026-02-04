@@ -188,11 +188,10 @@ async def _call_groq_vision(
     user_prompt: str,
     images: List[bytes],
     json_mode: bool = True,
-    retries: int = 2,
-    timeout_seconds: int = 30
+    retries: int = 2
 ) -> str:
     """
-    Função centralizada para chamar a API de visão da Groq com retry, fallback de modelos e timeout.
+    Função centralizada para chamar a API de visão da Groq com retry e fallback de modelos.
     """
     if not USE_GROQ or not GROQ_API_KEY or Groq is None:
         return "{}" if json_mode else ""
@@ -220,36 +219,21 @@ async def _call_groq_vision(
     for attempt in range(retries + 1):
         for model in models:
             try:
-                # Adicionar timeout para evitar travamentos
-                async def call_api():
-                    kwargs = {
-                        "model": model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": content}
-                        ],
-                        "temperature": 0.1, 
-                        "max_completion_tokens": 1024,
-                    }
-                    
-                    if json_mode:
-                        kwargs["response_format"] = {"type": "json_object"}
-                    
-                    # Groq client é síncrono, então rodamos em executor
-                    loop = asyncio.get_event_loop()
-                    resp = await loop.run_in_executor(
-                        None,
-                        lambda: client.chat.completions.create(**kwargs)
-                    )
-                    return resp.choices[0].message.content or ("{}" if json_mode else "")
+                kwargs = {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": content}
+                    ],
+                    "temperature": 0.1, 
+                    "max_completion_tokens": 1024,
+                }
                 
-                # Aplicar timeout
-                return await asyncio.wait_for(call_api(), timeout=timeout_seconds)
+                if json_mode:
+                    kwargs["response_format"] = {"type": "json_object"}
                 
-            except asyncio.TimeoutError:
-                last_error = f"Timeout ({timeout_seconds}s)"
-                logging.warning(f"Groq vision timeout (tentativa {attempt+1}, modelo {model})")
-                continue
+                resp = client.chat.completions.create(**kwargs)
+                return resp.choices[0].message.content or ("{}" if json_mode else "")
                 
             except Exception as e:
                 last_error = e
@@ -258,7 +242,7 @@ async def _call_groq_vision(
         
         # Se falhou com todos os modelos, espera um pouco antes do próximo retry
         if attempt < retries:
-            await asyncio.sleep(2 ** attempt)  # Backoff exponencial: 1s, 2s, 4s
+            await asyncio.sleep(1)
 
     logging.error(f"Todas as tentativas de OCR falharam. Último erro: {last_error}")
     return "{}" if json_mode else ""

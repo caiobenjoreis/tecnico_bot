@@ -6,8 +6,6 @@ from datetime import datetime
 import io
 import csv
 import asyncio
-from asyncio import Semaphore
-import time
 from telegram.error import RetryAfter
 from collections import defaultdict
 import logging
@@ -865,111 +863,93 @@ async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE
     sucessos_detalhados = []
     nunca_iniciaram = 0
     
-    # Rate Limiter: máximo 30 mensagens por segundo
-    semaphore = Semaphore(30)
-    last_send_time = time.time()
-    
     for idx, uid in enumerate(target_users, 1):
         try:
-            # Controle de taxa com semaphore
-            async with semaphore:
-                current_time = time.time()
-                elapsed = current_time - last_send_time
-                
-                # Garantir mínimo de 0.05s entre mensagens (20/segundo)
-                if elapsed < 0.05:
-                    await asyncio.sleep(0.05 - elapsed)
-                
-                message_sent = None
-                user_data = users.get(uid, {})
-                user_name = f"{user_data.get('nome', '')} {user_data.get('sobrenome', '')}".strip() or f"ID {uid}"
-                
-                if broadcast_data['type'] == 'text':
-                    msg = header + broadcast_data['text'] + footer
-                    message_sent = await context.bot.send_message(
+            message_sent = None
+            user_data = users.get(uid, {})
+            user_name = f"{user_data.get('nome', '')} {user_data.get('sobrenome', '')}".strip() or f"ID {uid}"
+            
+            if broadcast_data['type'] == 'text':
+                msg = header + broadcast_data['text'] + footer
+                message_sent = await context.bot.send_message(
+                    chat_id=int(uid),
+                    text=msg,
+                    parse_mode='Markdown',
+                    disable_notification=silent_notification
+                )
+            elif broadcast_data['type'] == 'photo':
+                caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
+                message_sent = await context.bot.send_photo(
+                    chat_id=int(uid),
+                    photo=broadcast_data['file_id'],
+                    caption=caption,
+                    parse_mode='Markdown',
+                    disable_notification=silent_notification
+                )
+            elif broadcast_data['type'] == 'video':
+                caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
+                message_sent = await context.bot.send_video(
+                    chat_id=int(uid),
+                    video=broadcast_data['file_id'],
+                    caption=caption,
+                    parse_mode='Markdown',
+                    disable_notification=silent_notification
+                )
+            elif broadcast_data['type'] == 'document':
+                caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
+                message_sent = await context.bot.send_document(
+                    chat_id=int(uid),
+                    document=broadcast_data['file_id'],
+                    caption=caption,
+                    parse_mode='Markdown',
+                    disable_notification=silent_notification
+                )
+            elif broadcast_data['type'] == 'audio':
+                caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
+                message_sent = await context.bot.send_audio(
+                    chat_id=int(uid),
+                    audio=broadcast_data['file_id'],
+                    caption=caption,
+                    parse_mode='Markdown',
+                    disable_notification=silent_notification
+                )
+            elif broadcast_data['type'] == 'voice':
+                message_sent = await context.bot.send_voice(
+                    chat_id=int(uid),
+                    voice=broadcast_data['file_id'],
+                    caption=broadcast_data.get('caption', ''),
+                    parse_mode='Markdown',
+                    disable_notification=silent_notification
+                )
+            
+            enviados += 1
+            sucessos_detalhados.append(user_name)
+            
+            if pin_message and message_sent:
+                try:
+                    await context.bot.pin_chat_message(
                         chat_id=int(uid),
-                        text=msg,
-                        parse_mode='Markdown',
-                        disable_notification=silent_notification
+                        message_id=message_sent.message_id,
+                        disable_notification=True
                     )
-                elif broadcast_data['type'] == 'photo':
-                    caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
-                    message_sent = await context.bot.send_photo(
-                        chat_id=int(uid),
-                        photo=broadcast_data['file_id'],
-                        caption=caption,
-                        parse_mode='Markdown',
-                        disable_notification=silent_notification
-                    )
-                elif broadcast_data['type'] == 'video':
-                    caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
-                    message_sent = await context.bot.send_video(
-                        chat_id=int(uid),
-                        video=broadcast_data['file_id'],
-                        caption=caption,
-                        parse_mode='Markdown',
-                        disable_notification=silent_notification
-                    )
-                elif broadcast_data['type'] == 'document':
-                    caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
-                    message_sent = await context.bot.send_document(
-                        chat_id=int(uid),
-                        document=broadcast_data['file_id'],
-                        caption=caption,
-                        parse_mode='Markdown',
-                        disable_notification=silent_notification
-                    )
-                elif broadcast_data['type'] == 'audio':
-                    caption = header + broadcast_data['caption'] + footer if broadcast_data['caption'] else header.strip()
-                    message_sent = await context.bot.send_audio(
-                        chat_id=int(uid),
-                        audio=broadcast_data['file_id'],
-                        caption=caption,
-                        parse_mode='Markdown',
-                        disable_notification=silent_notification
-                    )
-                elif broadcast_data['type'] == 'voice':
-                    message_sent = await context.bot.send_voice(
-                        chat_id=int(uid),
-                        voice=broadcast_data['file_id'],
-                        caption=broadcast_data.get('caption', ''),
-                        parse_mode='Markdown',
-                        disable_notification=silent_notification
-                    )
-                
-                enviados += 1
-                sucessos_detalhadas.append(user_name)
-                
-                if pin_message and message_sent:
-                    try:
-                        await context.bot.pin_chat_message(
-                            chat_id=int(uid),
-                            message_id=message_sent.message_id,
-                            disable_notification=True
-                        )
-                        fixados += 1
-                    except Exception as pin_error:
-                        logger.warning(f"Não foi possível fixar mensagem para {uid}: {pin_error}")
-                
-                last_send_time = time.time()
+                    fixados += 1
+                except Exception as pin_error:
+                    logger.warning(f"Não foi possível fixar mensagem para {uid}: {pin_error}")
                     
         except RetryAfter as e:
-            # Telegram pediu para esperar
-            logger.warning(f"Rate limit atingido! Aguardando {e.retry_after}s")
             await asyncio.sleep(e.retry_after)
-            # Tentar reenviar
+            # Tentar novamente após o tempo de espera
             try:
-                async with semaphore:
-                    if broadcast_data['type'] == 'text':
-                        msg = header + broadcast_data['text'] + footer
-                        await context.bot.send_message(
-                            chat_id=int(uid), 
-                            text=msg, 
-                            parse_mode='Markdown',
-                            disable_notification=silent_notification
-                        )
-                    enviados += 1
-                    sucessos_detalhados.append(user_name)
+                if broadcast_data['type'] == 'text':
+                    msg = header + broadcast_data['text'] + footer
+                    await context.bot.send_message(
+                        chat_id=int(uid), 
+                        text=msg, 
+                        parse_mode='Markdown',
+                        disable_notification=silent_notification
+                    )
+                enviados += 1
+                sucessos_detalhados.append(user_name)
             except Exception as retry_error:
                 falhas += 1
                 error_msg = str(retry_error).lower()
@@ -1010,6 +990,9 @@ async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE
                 )
             except Exception:
                 pass  # Ignora erro de edição muito rápida
+        
+        # Pequeno delay para evitar flood
+        await asyncio.sleep(0.05)
     
     # Relatório final detalhado
     relatorio = (
