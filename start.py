@@ -8,6 +8,16 @@ import sys
 import logging
 from multiprocessing import Process
 import signal
+from pathlib import Path
+
+# Carregar variáveis de ambiente (garantir que .env seja lido na raiz)
+try:
+    from dotenv import load_dotenv
+    env_path = Path('.') / '.env'
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path)
+except ImportError:
+    pass # Assume variables are already in environment
 
 # Configurar logging básico
 logging.basicConfig(

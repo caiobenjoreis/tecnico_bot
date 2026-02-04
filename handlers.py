@@ -620,7 +620,9 @@ async def gerar_mascara_final(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
-    username = user.username or user.first_name
+    raw_username = user.username or user.first_name
+    # Escapar caracteres de Markdown V1 para evitar erro Bad Request
+    username = raw_username.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
     
     # Verificar se usuário existe e se está bloqueado
     db_user = await db.get_user(str(user_id))
@@ -731,11 +733,16 @@ async def receber_regiao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     # Notificar Admins
+    esc_nome = novo_usuario['nome'].replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+    esc_sobrenome = novo_usuario['sobrenome'].replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+    esc_regiao = regiao.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+    esc_username = username.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
+
     msg_admin = (
         '👤 *Novo Cadastro Pendente*\n\n'
-        f'Nome: {novo_usuario["nome"]} {novo_usuario["sobrenome"]}\n'
-        f'Região: {regiao}\n'
-        f'User: @{username}\n'
+        f'Nome: {esc_nome} {esc_sobrenome}\n'
+        f'Região: {esc_regiao}\n'
+        f'User: @{esc_username}\n'
         f'ID: `{user_id}`'
     )
     
