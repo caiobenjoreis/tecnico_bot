@@ -248,6 +248,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await admin_callback_handler(update, context)
         
     elif query.data.startswith('broadcast_'):
+        if 'broadcast_data' in context.user_data:
+            from admin_handlers import confirmar_broadcast
+            return await confirmar_broadcast(update, context)
+        
         # Se cair aqui, significa que o usuário clicou em um botão de broadcast antigo
         # e o ConversationHandler não estava mais ativo (memória limpa ou reinício).
         # Como o broadcast depende de dados na memória (preview), não dá pra continuar.
