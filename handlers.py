@@ -427,28 +427,24 @@ async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
             return AGUARDANDO_FOTO_MASCARA
             
     # Processar OCR
-    logger.info("[MASCARA] Iniciando processamento OCR das fotos...")
     from utils import extrair_dados_completos
     
     imgs = context.user_data.get('fotos_mascara', [])
     dados = {}
-    logger.info(f"[MASCARA] Total de imagens para processar: {len(imgs)}")
     
     if imgs:
         msg_proc = await (update.callback_query.message if update.callback_query else update.message).reply_text('⏳ Analisando imagens e gerando máscara...', parse_mode='Markdown')
         try:
             tipo = context.user_data.get('tipo_mascara')
-            logger.info(f"[MASCARA] Tipo de máscara selecionado: {tipo}")
             dados = await extrair_dados_completos(imgs, tipo_mascara=tipo)
-            logger.info(f"[MASCARA] Dados extraídos do OCR: {dados}")
         except Exception as e:
-            logger.error(f"Erro OCR mascara: {e}", exc_info=True)
+            logger.error(f"Erro OCR mascara: {e}")
         
         # Tentar apagar msg de processamento
         try:
             await msg_proc.delete()
-        except Exception as e:
-            logger.warning(f"Não foi possível apagar mensagem de processamento: {e}")
+        except:
+            pass
     
     # Salvar dados extraídos
     context.user_data['dados_mascara'] = dados
@@ -499,10 +495,6 @@ async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
         return AGUARDANDO_MOTIVO_CANCELAMENTO
         
     elif tipo == 'Repasse':
-        logger.info("="*60)
-        logger.info("[MASCARA] Tipo é Repasse! Pedindo cidade...")
-        logger.info(f"[MASCARA] Retornando AGUARDANDO_CIDADE_REPASSE com valor: {AGUARDANDO_CIDADE_REPASSE}")
-        logger.info("="*60)
         await (update.callback_query.message if update.callback_query else update.message).reply_text(
             '📝 *Informações Complementares*\n\n'
             'Digite a *Cidade*:',
@@ -569,38 +561,27 @@ async def receber_motivo_cancelamento(update: Update, context: ContextTypes.DEFA
     return await gerar_mascara_final(update, context)
 
 async def receber_cidade_repasse(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info("="*60)
-    logger.info(f"[MASCARA] 📨 RECEBER_CIDADE_REPASSE CHAMADO!")
-    logger.info(f"[MASCARA] Usuário ID: {update.effective_user.id}")
-    logger.info(f"[MASCARA] Texto recebido: {update.message.text}")
-    logger.info("="*60)
-
     cidade = update.message.text.strip().upper()
     context.user_data['cidade_repasse'] = cidade
-    logger.info(f"[MASCARA] Cidade salva no user_data: {cidade}")
     
     keyboard = [
         [InlineKeyboardButton("📱 Vivo", callback_data='oper_vivo')],
         [InlineKeyboardButton("📱 Claro", callback_data='oper_claro')],
         [InlineKeyboardButton("📱 Tim", callback_data='oper_tim')],
         [InlineKeyboardButton("📱 Oi", callback_data='oper_oi')],
-        [InlineKeyboardButton("📱 Outro", callback_data='oper_outro')],
+        [InlineKeyboardButton("📱 Outro", callback_data='oper_outro')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    logger.info("[MASCARA] Enviando mensagem para selecionar operadora...")
     await update.message.reply_text(
-        f"✅ Cidade: *{cidade}*\n\n"
-        "Selecione a *Operadora*:",
+        f'✅ Cidade: *{cidade}*\n\n'
+        'Selecione a *Operadora*:',
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
-    logger.info(f"[MASCARA] Mensagem enviada! Retornando AGUARDANDO_OPERADORA_REPASSE (valor: {AGUARDANDO_OPERADORA_REPASSE})")
-    logger.info("="*60)
     return AGUARDANDO_OPERADORA_REPASSE
 
 async def receber_operadora_repasse(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"[MASCARA] Recebendo operadora: {update.callback_query.data} de usuário {update.effective_user.id}")
     query = update.callback_query
     await query.answer()
     
@@ -614,23 +595,19 @@ async def receber_operadora_repasse(update: Update, context: ContextTypes.DEFAUL
     
     operadora = oper_map.get(query.data, 'OUTRO')
     context.user_data['operadora_repasse'] = operadora
-    logger.info(f"[MASCARA] Operadora salva: {operadora}")
     
     await query.edit_message_text(
         f'✅ Operadora: *{operadora}*\n\n'
         'Digite as *Observações* (ou "-" se não houver):',
         parse_mode='Markdown'
     )
-    logger.info(f"[MASCARA] Mensagem de obs enviada. Retornando AGUARDANDO_OBS_REPASSE")
     return AGUARDANDO_OBS_REPASSE
 
 async def receber_obs_repasse(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"[MASCARA] Recebendo obs repasse: {update.message.text} de usuário {update.effective_user.id}")
     obs = update.message.text.strip()
     if obs == '-':
         obs = ''
     context.user_data['obs_repasse'] = obs
-    logger.info(f"[MASCARA] Obs salva: {obs}")
     return await gerar_mascara_final(update, context)
 
 # ==================== GERAÇÃO FINAL DA MÁSCARA ====================
@@ -912,10 +889,7 @@ async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def receber_sa(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sa = update.message.text.strip().upper()
-    # Normalize SA: add prefix if just numeric
-    if sa and sa.isdigit():
-        sa = f"SA-{sa}"
+    sa = update.message.text.strip()
     context.user_data['sa'] = sa
     logger.info(f"📋 SA recebida: {sa} de usuário {update.message.from_user.id}")
     logger.debug(f"Context user_data atual: {context.user_data}")
@@ -1603,12 +1577,7 @@ async def consultar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tecnico = resultado.get('tecnico_nome', 'N/A')
         data = format_data(resultado.get('data', ''))
         serial = resultado.get('serial_modem', '')
-        # Fix: key is 'serial_mesh', not 'mesh'
-        mesh_text = resultado.get('serial_mesh', '')
-        mesh_list = []
-        if mesh_text:
-            # Split if multiple mesh serials separated by comma or space
-            mesh_list = [m.strip() for m in mesh_text.replace(',', ' ').split() if m.strip()]
+        mesh_list = resultado.get('mesh', [])
         
         msg = (
             f'📋 *SA:* `{resultado["sa"]}`\n'
