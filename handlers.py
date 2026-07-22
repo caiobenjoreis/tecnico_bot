@@ -346,12 +346,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ConversationHandler.END
 
     # Callbacks de estados internos que podem chegar fora do contexto (ex: bot reiniciado)
-    # Nota: 'confirmar_sa_dup' e 'cancelar_registro' têm tratamento explícito acima.
-    # 'gerar_mascara' e 'skip_photo' pertencem ao fluxo de máscaras (AGUARDANDO_FOTO_MASCARA)
-    # e chegam aqui apenas se a sessão realmente expirou.
+    # 'gerar_mascara' e 'skip_photo' pertencem ao fluxo de máscaras.
+    # Se tipo_mascara ainda está no contexto, a sessão ainda é válida — redireciona.
+    if query.data in ('gerar_mascara', 'skip_photo'):
+        if context.user_data.get('tipo_mascara'):
+            return await receber_foto_mascara(update, context)
+        await query.answer("⏳ Sessão expirada. Use /start para recomeçar.", show_alert=True)
+        return ConversationHandler.END
+
     callbacks_sessao = [
         'trocou_ont_sim', 'trocou_ont_nao',
-        'gerar_mascara', 'skip_photo',
         'retry_save',
     ]
     if query.data in callbacks_sessao:
