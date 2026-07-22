@@ -345,12 +345,32 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ Sessão expirada. Use /start", show_alert=True)
             return ConversationHandler.END
 
-    # Callbacks de estados internos que podem chegar fora do contexto (ex: bot reiniciado)
-    # 'gerar_mascara' e 'skip_photo' pertencem ao fluxo de máscaras.
-    # Se tipo_mascara ainda está no contexto, a sessão ainda é válida — redireciona.
+    # Callbacks do fluxo de máscaras que chegam fora do estado correto.
+    # Se tipo_mascara ainda está no contexto, redireciona para o handler adequado.
     if query.data in ('gerar_mascara', 'skip_photo'):
         if context.user_data.get('tipo_mascara'):
             return await receber_foto_mascara(update, context)
+        await query.answer("⏳ Sessão expirada. Use /start para recomeçar.", show_alert=True)
+        return ConversationHandler.END
+
+    # Callbacks de tipo de pendência
+    if query.data.startswith('pend_'):
+        if context.user_data.get('tipo_mascara'):
+            return await receber_tipo_pendencia(update, context)
+        await query.answer("⏳ Sessão expirada. Use /start para recomeçar.", show_alert=True)
+        return ConversationHandler.END
+
+    # Callbacks de motivo de cancelamento
+    if query.data.startswith('canc_'):
+        if context.user_data.get('tipo_mascara'):
+            return await receber_motivo_cancelamento(update, context)
+        await query.answer("⏳ Sessão expirada. Use /start para recomeçar.", show_alert=True)
+        return ConversationHandler.END
+
+    # Callbacks de operadora do repasse
+    if query.data.startswith('oper_'):
+        if context.user_data.get('tipo_mascara'):
+            return await receber_operadora_repasse(update, context)
         await query.answer("⏳ Sessão expirada. Use /start para recomeçar.", show_alert=True)
         return ConversationHandler.END
 
@@ -562,9 +582,9 @@ async def receber_tipo_pendencia(update: Update, context: ContextTypes.DEFAULT_T
     tipo_pendencia = tipo_map.get(query.data, 'Outro')
     context.user_data['tipo_pendencia'] = tipo_pendencia
     
-    await query.edit_message_text(
-        f'✅ Tipo: *{tipo_pendencia}*\n\n'
-        'Agora digite as *Observações* detalhadas (ou "-" se não houver):',
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=f'✅ Tipo: *{tipo_pendencia}*\n\nAgora digite as *Observações* detalhadas (ou "-" se não houver):',
         parse_mode='Markdown'
     )
     return AGUARDANDO_OBS_PENDENCIA
@@ -641,9 +661,9 @@ async def receber_operadora_repasse(update: Update, context: ContextTypes.DEFAUL
     context.user_data['operadora_repasse'] = operadora
     logger.info(f"[MASCARA] Operadora salva: {operadora}")
     
-    await query.edit_message_text(
-        f'✅ Operadora: *{operadora}*\n\n'
-        'Digite as *Observações* (ou "-" se não houver):',
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=f'✅ Operadora: *{operadora}*\n\nDigite as *Observações* (ou "-" se não houver):',
         parse_mode='Markdown'
     )
     logger.info(f"[MASCARA] Mensagem de obs enviada. Retornando AGUARDANDO_OBS_REPASSE")
