@@ -306,6 +306,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text('🎭 *Gerador de Máscaras*\n\nSelecione o modelo desejado:', reply_markup=reply_markup, parse_mode='Markdown')
         return AGUARDANDO_TIPO_MASCARA
 
+    elif query.data.startswith('mask_'):
+        # Seleção de tipo de máscara chegando fora do estado AGUARDANDO_TIPO_MASCARA
+        # (ex: entry point sem contexto ativo) — delegar direto ao handler correto
+        return await receber_tipo_mascara(update, context)
+
     # Callbacks do painel admin
     elif query.data.startswith('admin_'):
         from admin_handlers import admin_callback_handler
