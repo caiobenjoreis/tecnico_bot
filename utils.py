@@ -284,14 +284,21 @@ async def _call_groq_vision(
             try:
                 # Adicionar timeout para evitar travamentos
                 async def call_api():
+                    # Para o modelo qwen/qwen3.6-27b com visão, a documentação oficial do Groq
+                    # recomenda incluir as instruções diretamente no user message junto com a imagem,
+                    # em vez de usar um system message separado. Isso evita o erro 400 json_validate_failed.
+                    # Ref: https://console.groq.com/docs/vision
+                    user_content_with_system = [
+                        {"type": "text", "text": f"{system_prompt}\n\n{content[0]['text']}"}
+                    ] + content[1:]  # mantém as imagens
+
                     kwargs = {
                         "model": model,
                         "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": content}
+                            {"role": "user", "content": user_content_with_system}
                         ],
-                        "temperature": 0.1, 
-                        "max_completion_tokens": 1024,
+                        "temperature": 0.1,
+                        "max_completion_tokens": 512,
                     }
                     
                     if json_mode:
