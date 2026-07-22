@@ -7,6 +7,9 @@ import logging
 import asyncio
 from typing import List, Optional, Dict, Any
 
+# Configurar logger
+logger = logging.getLogger(__name__)
+
 # ==================== PROMPTS E CONSTANTES OCR ====================
 
 OCR_SYSTEM_DEFAULT = (
@@ -52,16 +55,16 @@ OCR_SYSTEM_MASK = (
 )
 
 CAMPO_INSTRUCOES = {
-    'sa': "Número da SA/OS/Pedido. Procure por: 'SA', 'OS', 'Pedido', 'Ordem de Serviço'. Pode estar no topo da tela ou em campo específico.",
-    'gpon': "Código GPON/Designação/Acesso. CRÍTICO! Procure por: 'GPON', 'Acesso', 'Designação', 'ONT ID', 'Código de Acesso'. Formato alfanumérico com 6-20 caracteres, pode ter traços/pontos/barras. NÃO confunda com CPF ou telefone!",
-    'cliente': "Nome completo do cliente. Procure por: 'Cliente', 'Nome', 'Assinante', 'Titular'.",
-    'documento': "CPF/CNPJ do cliente. Procure por: 'CPF', 'CNPJ', 'Doc.', 'Doc. Assoc.', 'Documento'. Pode ter pontos e traços.",
-    'telefone': "Telefone de contato. Procure por: 'Telefone', 'Celular', 'Contato', 'Fone'. Formato com DDD.",
-    'endereco': "Endereço completo. Procure por: 'Endereço', 'Rua', 'Logradouro', 'Local'. Deve incluir rua, número, bairro.",
+    'sa': "Número da SA/OS/Pedido. Procure por: 'SA' no TOPO DA TELA (ex: SA-37273090) ou campo 'SA'.",
+    'gpon': "Código GPON/Designação/Acesso. CRÍTICO! Procure na ABA REDE por 'Acesso GPON' (ex: A0002VG20). Formato alfanumérico com 6-20 caracteres. NÃO confunda com CPF ou telefone!",
+    'cliente': "Nome completo do cliente. Procure na ABA INFO ou ABA CLIENTE por 'Cliente'.",
+    'documento': "CPF/CNPJ do cliente. Procure na ABA INFO por 'Doc. Assoc.' (ex: 10426209).",
+    'telefone': "Telefone de contato. Procure na ABA CLIENTE por 'Contato 1' ou 'Contato Principal' (ex: 47997849329).",
+    'endereco': "Endereço completo. Procure na ABA INFO ou ABA CLIENTE por 'Endereço' (inclui rua, número, bairro, CEP, cidade).",
     'cdo': "Código da CDO/CDOE. Procure por: 'CDO', 'CDOE', 'Caixa', 'Armário Óptico'.",
     'porta': "Número da porta. Procure por: 'Porta', 'Port', 'P', 'Porta CDO', 'Porta Cliente'.",
     'estacao': "Estação/Armário. Procure por: 'Estação', 'EST', 'Armário', 'Central'.",
-    'atividade': "Tipo de atividade/serviço. Procure por: 'Atividade', 'Tipo', 'Serviço', 'Categoria'. Ex: Instalação, Reparo, Defeito."
+    'atividade': "Tipo de atividade/serviço. Procure na ABA INFO por 'Atividade' (ex: INSTALAÇÃO BL + MESH)."
 }
 
 OCR_PROMPTS_ESPECIFICOS = {
@@ -82,7 +85,8 @@ OCR_PROMPTS_ESPECIFICOS = {
 
 def is_valid_sa(sa: str) -> bool:
     try:
-        return bool(re.fullmatch(r"SA-\d{5,}", sa or ""))
+        # Accept both formats: "SA-12345" and just numeric "12345"
+        return bool(re.fullmatch(r"(SA-)?\d{5,}", sa or ""))
     except Exception:
         return False
 
@@ -219,22 +223,29 @@ async def _call_groq_vision(
     """
     Função centralizada para chamar a API de visão da Groq com retry, fallback de modelos e timeout.
     """
+    logger.info(f"[OCR] Iniciando chamada Groq - USE_GROQ: {USE_GROQ}, GROQ_API_KEY setado: {bool(GROQ_API_KEY)}, Groq disponível: {Groq is not None}")
+    
     if not USE_GROQ or not GROQ_API_KEY or Groq is None:
+        logger.warning("[OCR] Groq não configurado, retornando vazio")
         return "{}" if json_mode else ""
 
     client = Groq(api_key=GROQ_API_KEY)
     
-    # Modelos em ordem de preferência
+    # Modelos em ordem de preferência (usando modelos disponíveis no Groq)
     models = [
-        GROQ_MODEL or "llama-3.2-90b-vision-preview",
-        "llama-3.2-11b-vision-preview",
-        "meta-llama/llama-3.2-90b-vision-preview" 
+        GROQ_MODEL or "qwen/qwen3.6-27b",
+        # Add other models if needed, but qwen/qwen3.6-27b is the only one with image support right now
     ]
+    logger.info(f"[OCR] Modelos a tentar: {models}")
     
-    # Preparar conteúdo do usuário
+    # Preparar conteúdo do usuário (limita a 3 imagens, máximo suportado pelo modelo)
     content = [{"type": "text", "text": user_prompt}]
-    for img in images:
+    # Pega apenas as primeiras 3 imagens
+    limited_images = images[:3]
+    logger.info(f"[OCR] Total de imagens recebidas: {len(images)}, usando apenas as primeiras {len(limited_images)}")
+    for idx, img in enumerate(limited_images):
         b64 = base64.b64encode(img).decode("ascii")
+        logger.info(f"[OCR] Imagem {idx+1} codificada em base64, tamanho: {len(b64)} chars")
         content.append({
             "type": "image_url", 
             "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
@@ -243,7 +254,9 @@ async def _call_groq_vision(
     last_error = None
 
     for attempt in range(retries + 1):
+        logger.info(f"[OCR] Tentativa {attempt+1}/{retries+1}")
         for model in models:
+            logger.info(f"[OCR] Tentando modelo: {model}")
             try:
                 # Adicionar timeout para evitar travamentos
                 async def call_api():
@@ -269,7 +282,9 @@ async def _call_groq_vision(
                     return resp.choices[0].message.content or ("{}" if json_mode else "")
                 
                 # Aplicar timeout
-                return await asyncio.wait_for(call_api(), timeout=timeout_seconds)
+                result = await asyncio.wait_for(call_api(), timeout=timeout_seconds)
+                logger.info(f"[OCR] Sucesso com modelo {model}! Resultado: {result[:200]}...")
+                return result
                 
             except asyncio.TimeoutError:
                 last_error = f"Timeout ({timeout_seconds}s)"
@@ -278,12 +293,14 @@ async def _call_groq_vision(
                 
             except Exception as e:
                 last_error = e
-                logging.warning(f"Groq vision falhou (tentativa {attempt+1}, modelo {model}): {e}")
+                logging.warning(f"Groq vision falhou (tentativa {attempt+1}, modelo {model}): {type(e).__name__}: {e}", exc_info=True)
                 continue # Tenta próximo modelo
         
         # Se falhou com todos os modelos, espera um pouco antes do próximo retry
         if attempt < retries:
-            await asyncio.sleep(2 ** attempt)  # Backoff exponencial: 1s, 2s, 4s
+            wait_time = 2 ** attempt
+            logger.info(f"[OCR] Aguardando {wait_time}s antes da próxima tentativa...")
+            await asyncio.sleep(wait_time)  # Backoff exponencial: 1s, 2s, 4s
 
     logging.error(f"Todas as tentativas de OCR falharam. Último erro: {last_error}")
     return "{}" if json_mode else ""
@@ -305,8 +322,8 @@ async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
             match = re.search(r"\{.*\}", response_text, re.DOTALL)
             if match:
                 data = json.loads(match.group(0))
-        except:
-            pass
+        except json.JSONDecodeError:
+            logger.warning(f"[OCR] extrair_campos_por_imagem: fallback JSON também falhou. Resposta: {response_text[:200]!r}")
 
     # Normalização e Validação
     sa = str(data.get("sa") or "").strip().upper()
@@ -375,7 +392,8 @@ async def extrair_campo_especifico(images: List[bytes], campo: str) -> dict:
     
     try:
         data = json.loads(response_text)
-    except:
+    except json.JSONDecodeError as e:
+        logger.warning(f"[OCR] extrair_campo_especifico '{campo}': falha ao parsear JSON. Erro: {e}. Resposta: {response_text[:200]!r}")
         return {}
 
     # Validação específica
@@ -467,8 +485,9 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
         f"🎯 TAREFA: Extrair dados para máscara '{tipo_mascara or 'Geral'}'\n\n"
         f"📋 CAMPOS OBRIGATÓRIOS:{instrucoes_extras}\n\n"
         f"🔍 ONDE PROCURAR CADA CAMPO:\n{instrucoes_campos}\n\n"
-        "💡 DICAS:\n"
-        "- Analise TODAS as imagens fornecidas\n"
+        "💡 DICAS ESPECÍFICAS PARA ESSE APP:\n"
+        "- As imagens são ABAS DIFERENTES DE UM MESMO TICKET (INFO, CLIENTE, REDE, etc.)\n"
+        "- Analise TODAS as imagens e COMBINE as informações delas\n"
         "- Procure em títulos, labels, campos, tabelas\n"
         "- Se encontrar apenas parte da informação, use-a\n"
         "- Converta tudo para MAIÚSCULAS\n"
@@ -493,7 +512,8 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
     
     try:
         data = json.loads(response_text)
-    except:
+    except json.JSONDecodeError as e:
+        logger.error(f"[OCR] extrair_dados_completos: falha ao parsear JSON da resposta. Erro: {e}. Resposta recebida: {response_text[:300]!r}")
         return {}
         
     # Limpeza e normalização
@@ -502,7 +522,7 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
         if v is None or v == "null":
             result[k] = ""
         else:
-            # Manter alguns caracteres especiais em telefone e documento
+            # Manter formatação original em telefone e documento (CPF pode ter pontuação)
             if k in ['telefone', 'documento']:
                 result[k] = str(v).strip()
             else:
