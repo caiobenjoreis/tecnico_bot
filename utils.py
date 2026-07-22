@@ -238,16 +238,40 @@ async def _call_groq_vision(
     ]
     logger.info(f"[OCR] Modelos a tentar: {models}")
     
-    # Preparar conteúdo do usuário (limita a 3 imagens, máximo suportado pelo modelo)
+    # Preparar conteúdo do usuário
+    # Comprime e redimensiona imagens para ficar dentro do limite de 8000 tokens do Groq free tier.
+    # Estimativa: 1 token ≈ 750 chars base64. Uma imagem 512x512 JPEG q60 fica ~100-150KB → ~5000 tokens.
+    def compress_image(img_bytes: bytes, max_size: int = 512, quality: int = 60) -> bytes:
+        """Redimensiona e comprime imagem para caber no limite de tokens do Groq."""
+        try:
+            from PIL import Image
+            import io as _io
+            img = Image.open(_io.BytesIO(img_bytes))
+            if img.mode not in ('RGB', 'L'):
+                img = img.convert('RGB')
+            img.thumbnail((max_size, max_size), Image.LANCZOS)
+            out = _io.BytesIO()
+            img.save(out, format='JPEG', quality=quality, optimize=True)
+            compressed = out.getvalue()
+            logger.info(f"[OCR] Imagem comprimida: {len(img_bytes)//1024}KB → {len(compressed)//1024}KB")
+            return compressed
+        except Exception as e:
+            logger.warning(f"[OCR] Falha ao comprimir imagem: {e} — usando original")
+            return img_bytes
+
+    # Usa apenas 1 imagem para garantir que ficamos dentro do limite de 8000 tokens.
+    # O prompt das máscaras já consome ~1500 tokens, então só sobra espaço para 1 imagem.
+    limited_images = images[:1]
+    compressed_images = [compress_image(img) for img in limited_images]
+    logger.info(f"[OCR] Imagens: {len(images)} recebidas, enviando {len(compressed_images)} ao Groq")
+
     content = [{"type": "text", "text": user_prompt}]
-    # Pega apenas as primeiras 3 imagens
-    limited_images = images[:3]
-    logger.info(f"[OCR] Total de imagens recebidas: {len(images)}, usando apenas as primeiras {len(limited_images)}")
-    for idx, img in enumerate(limited_images):
+    for idx, img in enumerate(compressed_images):
         b64 = base64.b64encode(img).decode("ascii")
-        logger.info(f"[OCR] Imagem {idx+1} codificada em base64, tamanho: {len(b64)} chars")
+        est_tokens = len(b64) // 750
+        logger.info(f"[OCR] Imagem {idx+1}: {len(b64)} chars base64 (~{est_tokens} tokens)")
         content.append({
-            "type": "image_url", 
+            "type": "image_url",
             "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
         })
 
