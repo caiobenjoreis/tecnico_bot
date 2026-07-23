@@ -217,8 +217,8 @@ async def _call_groq_vision(
     user_prompt: str,
     images: List[bytes],
     json_mode: bool = True,
-    retries: int = 1,
-    timeout_seconds: int = 15
+    retries: int = 2,
+    timeout_seconds: int = 30
 ) -> str:
     """
     Função centralizada para chamar a API de visão da Groq com retry, fallback de modelos e timeout.
@@ -237,8 +237,8 @@ async def _call_groq_vision(
     ]
     logger.info(f"[OCR] Modelos a tentar: {models}")
     
-    # Comprime e redimensiona imagens — 768px / qualidade 75.
-    def compress_image(img_bytes: bytes, max_size: int = 768, quality: int = 75) -> bytes:
+    # Comprime e redimensiona imagens — 512px / qualidade 65 (reduz consumo de tokens)
+    def compress_image(img_bytes: bytes, max_size: int = 512, quality: int = 65) -> bytes:
         try:
             from PIL import Image
             import io as _io
@@ -291,7 +291,7 @@ async def _call_groq_vision(
                             {"role": "user", "content": user_content_with_system}
                         ],
                         "temperature": 0.1,
-                        "max_completion_tokens": 1024,
+                        "max_completion_tokens": 512,
                     }
 
                     # json_mode só na primeira tentativa (evita 400 json_validate_failed)
@@ -327,7 +327,7 @@ async def _call_groq_vision(
                                 "model": model,
                                 "messages": [{"role": "user", "content": uc}],
                                 "temperature": 0.1,
-                                "max_completion_tokens": 1024,
+                                "max_completion_tokens": 512,
                             }
                             loop2 = asyncio.get_running_loop()
                             r = await loop2.run_in_executor(
