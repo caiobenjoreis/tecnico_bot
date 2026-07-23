@@ -239,9 +239,9 @@ async def _call_groq_vision(
     logger.info(f"[OCR] Modelos a tentar: {models}")
     
     # Comprime e redimensiona imagens — com múltiplas imagens numa chamada só,
-    # precisa comprimir mais para caber no limite de tokens do Groq (8000 TPM free tier).
-    # 512px / qualidade 65 → ~30-50KB por imagem → cabe até 5 imagens numa chamada.
-    def compress_image(img_bytes: bytes, max_size: int = 512, quality: int = 65) -> bytes:
+    # precisa comprimir para caber no limite de tokens do Groq.
+    # 768px / qualidade 75 → ~50-80KB por imagem → cabe até 5 imagens mantendo texto legível.
+    def compress_image(img_bytes: bytes, max_size: int = 768, quality: int = 75) -> bytes:
         """Redimensiona e comprime imagem para caber no limite de tokens do Groq."""
         try:
             from PIL import Image
@@ -253,17 +253,20 @@ async def _call_groq_vision(
             out = _io.BytesIO()
             img.save(out, format='JPEG', quality=quality, optimize=True)
             compressed = out.getvalue()
-            logger.info(f"[OCR] Imagem comprimida: {len(img_bytes)//1024}KB → {len(compressed)//1024}KB")
+            logger.info(f"[OCR] Imagem comprimida: {len(img_bytes)//1024}KB → {len(compressed)//1024}KB ({max_size}px q{quality})")
             return compressed
         except Exception as e:
             logger.warning(f"[OCR] Falha ao comprimir imagem: {e} — usando original")
             return img_bytes
 
     # Enviar todas as imagens numa única chamada (modelo suporta até 5).
-    # 1 chamada = rápido + sem rate limit + modelo vê todas as abas de uma vez.
+    # Se houver mais de 5, avisa no log quais estão sendo cortadas.
+    total_images = len(images)
     limited_images = images[:5]
+    if total_images > 5:
+        logger.warning(f"[OCR] {total_images} imagens recebidas, mas apenas as 5 primeiras serão enviadas (limite do modelo)")
     compressed_images = [compress_image(img) for img in limited_images]
-    logger.info(f"[OCR] {len(images)} imagens recebidas, enviando {len(compressed_images)} numa única chamada")
+    logger.info(f"[OCR] Enviando {len(compressed_images)} imagem(ns) numa única chamada")
 
     content = [{"type": "text", "text": user_prompt}]
     for idx, img in enumerate(compressed_images):
@@ -487,63 +490,92 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
     """
     Extrai todos os dados possíveis de uma ou mais imagens para preenchimento de máscaras.
     Se tipo_mascara for fornecido, foca nos campos específicos daquela máscara.
+
+    IMPORTANTE: Cada imagem é uma ABA diferente do mesmo ticket (INFO, CLIENTE,
+    REDE, etc.). O modelo DEVE analisar TODAS as imagens e COMBINAR os dados
+    extraídos de cada aba para preencher o JSON completo.
     """
-    # Prompt curto e direto com labels exatos do app para cada tipo de máscara.
+    # Define campos e onde encontrar cada um, por tipo de máscara.
     if tipo_mascara == 'Batimento CDOE':
         campos_json = '"atividade":"","estacao":"","cdo":"","porta":"","gpon":""'
-        foco = (
-            "SA (no topo da tela, ex: SA-37285421), "
-            "atividade (campo 'Atividade' na aba INFO, ex: INSTALAÇÃO BL FIBRA), "
-            "estação/armário (campo 'Estação', 'EST' ou 'Central'), "
-            "CDO/CDOE (campos 'CDO', 'CDOE', 'CDOPath' ou 'Caixa'), "
-            "porta (campo 'Porta', 'Port' ou número após 'PTP.FO.O:'), "
-            "GPON (campo 'Acesso GPON', ex: A0002VH1E)"
-        )
+        mapa_campos = [
+            ("atividade",   "aba INFO → campo 'Atividade' (ex: INSTALAÇÃO BL FIBRA)"),
+            ("estacao",     "aba REDE → campo 'Estação', 'EST' ou 'Central'"),
+            ("cdo",         "aba REDE → campo 'CDOPath' (parte antes de '.PTP', ex: CDOI-1220.2) ou 'CDO'/'CDOE'"),
+            ("porta",       "aba REDE → número após 'PTP.FO.O:' no campo CDOPath (ex: 1) ou campo 'Porta'"),
+            ("gpon",        "aba REDE → campo 'Acesso GPON' (ex: A0002VH1E)"),
+        ]
     elif tipo_mascara == 'Pendência':
         campos_json = '"atividade":"","sa":"","documento":"","gpon":"","cliente":"","telefone":"","endereco":""'
-        foco = (
-            "SA (no topo da tela, ex: SA-37285421), "
-            "atividade (campo 'Atividade' na aba INFO, ex: INSTALAÇÃO BL FIBRA), "
-            "documento (campo 'Doc. Assoc.' na aba INFO), "
-            "GPON (campo 'Acesso GPON' na aba Rede, ex: A0002VH1E), "
-            "cliente (campo 'Cliente'), "
-            "telefone (campo 'Contato 1' ou 'Contato Principal'), "
-            "endereço completo (campo 'Endereço')"
-        )
+        mapa_campos = [
+            ("sa",          "TOPO DA TELA em QUALQUER aba → 'SA' (ex: SA-37285421)"),
+            ("atividade",   "aba INFO → campo 'Atividade' (ex: INSTALAÇÃO BL FIBRA)"),
+            ("documento",   "aba INFO → campo 'Doc. Assoc.' (ex: 10426209)"),
+            ("gpon",        "aba REDE → campo 'Acesso GPON' (ex: A0002VH1E)"),
+            ("cliente",     "aba CLIENTE ou INFO → campo 'Cliente'"),
+            ("telefone",    "aba CLIENTE → campo 'Contato 1' ou 'Contato Principal' (ex: 47997849329)"),
+            ("endereco",    "aba CLIENTE ou INFO → campo 'Endereço' (rua, número, bairro, CEP, cidade)"),
+        ]
     elif tipo_mascara == 'Cancelamento':
         campos_json = '"sa":"","documento":"","telefone":"","cliente":""'
-        foco = (
-            "SA (no topo da tela, ex: SA-37285421), "
-            "documento (campo 'Doc. Assoc.' na aba INFO), "
-            "telefone (campo 'Contato 1' ou 'Contato Principal'), "
-            "cliente (campo 'Cliente')"
-        )
+        mapa_campos = [
+            ("sa",          "TOPO DA TELA em QUALQUER aba → 'SA' (ex: SA-37285421)"),
+            ("documento",   "aba INFO → campo 'Doc. Assoc.' (ex: 10426209)"),
+            ("telefone",    "aba CLIENTE → campo 'Contato 1' ou 'Contato Principal'"),
+            ("cliente",     "aba CLIENTE ou INFO → campo 'Cliente'"),
+        ]
     elif tipo_mascara == 'Repasse':
         campos_json = '"sa":"","gpon":"","documento":"","cdo":"","porta":"","endereco":"","cliente":"","telefone":""'
-        foco = (
-            "SA (no topo da tela, ex: SA-37285421), "
-            "GPON (campo 'Acesso GPON', ex: A0002VH1E), "
-            "documento (campo 'Doc. Assoc.' na aba INFO), "
-            "CDO (campo 'CDOPath', use apenas a parte antes de '.PTP', ex: CDOI-1220.2), "
-            "porta (campo 'CDOPath', use o número após 'PTP.FO.O:', ex: 1), "
-            "endereço completo (campo 'Endereço'), "
-            "cliente (campo 'Cliente'), "
-            "telefone (campo 'Contato 1' ou 'Contato Principal')"
-        )
+        mapa_campos = [
+            ("sa",          "TOPO DA TELA em QUALQUER aba → 'SA' (ex: SA-37285421)"),
+            ("gpon",        "aba REDE → campo 'Acesso GPON' (ex: A0002VH1E)"),
+            ("documento",   "aba INFO → campo 'Doc. Assoc.' (ex: 10426209)"),
+            ("cdo",         "aba REDE → campo 'CDOPath' (parte antes de '.PTP', ex: CDOI-1220.2)"),
+            ("porta",       "aba REDE → número após 'PTP.FO.O:' no campo CDOPath (ex: 1)"),
+            ("endereco",    "aba CLIENTE ou INFO → campo 'Endereço'"),
+            ("cliente",     "aba CLIENTE ou INFO → campo 'Cliente'"),
+            ("telefone",    "aba CLIENTE → campo 'Contato 1' ou 'Contato Principal'"),
+        ]
     else:
         campos_json = '"sa":"","gpon":"","cliente":"","documento":"","telefone":"","endereco":"","cdo":"","porta":"","estacao":"","atividade":""'
-        foco = (
-            "SA (no topo, ex: SA-37285421), GPON (campo 'Acesso GPON'), "
-            "cliente (campo 'Cliente'), documento (campo 'Doc. Assoc.'), "
-            "telefone (campo 'Contato 1'), endereço (campo 'Endereço'), "
-            "CDO, porta, estação, atividade"
-        )
+        mapa_campos = [
+            ("sa",          "TOPO DA TELA → 'SA' (ex: SA-37285421)"),
+            ("gpon",        "aba REDE → 'Acesso GPON' (ex: A0002VH1E)"),
+            ("cliente",     "aba CLIENTE → 'Cliente'"),
+            ("documento",   "aba INFO → 'Doc. Assoc.'"),
+            ("telefone",    "aba CLIENTE → 'Contato 1'"),
+            ("endereco",    "aba CLIENTE → 'Endereço'"),
+            ("cdo",         "aba REDE → 'CDOPath' ou 'CDO'"),
+            ("porta",       "aba REDE → número após 'PTP.FO.O:'"),
+            ("estacao",     "aba REDE → 'Estação' ou 'Central'"),
+            ("atividade",   "aba INFO → 'Atividade'"),
+        ]
 
-    system = "Você é um OCR especializado em extrair dados de prints de sistemas de telecomunicações. Retorne APENAS JSON válido."
+    instrucoes_campos = "\n".join([f"  • {nome}: {onde}" for nome, onde in mapa_campos])
+
+    system = (
+        "Você é um OCR especializado em extrair dados de prints de sistemas de telecomunicações. "
+        "Você receberá MÚLTIPLAS imagens que são ABAS DIFERENTES de um MESMO TICKET "
+        "(ex: INFO, CLIENTE, REDE). Analise CADA IMAGEM individualmente e COMBINE "
+        "as informações de TODAS as abas para preencher o JSON. "
+        "NÃO retorne campo vazio se a informação estiver visível em QUALQUER uma das imagens. "
+        "Retorne APENAS JSON válido."
+    )
 
     user = (
-        f"Extraia do print: {foco}.\n"
-        f"Retorne exatamente este JSON preenchido com os valores encontrados (string vazia se não encontrar):\n"
+        f"🎯 TAREFA: Extrair dados para máscara '{tipo_mascara or 'Geral'}'.\n\n"
+        f"⚠️ IMPORTANTE: Você está vendo {len(images)} ABAS DIFERENTES DO MESMO TICKET. "
+        f"Os dados estão ESPALHADOS entre elas — olhe TODAS as imagens com atenção!\n\n"
+        f"📋 ONDE ENCONTRAR CADA CAMPO (em qual aba e label):\n"
+        f"{instrucoes_campos}\n\n"
+        f"💡 REGRAS:\n"
+        f"- Analise IMAGEM POR IMAGEM e anote tudo que encontrar\n"
+        f"- Se um campo aparecer em MAIS DE UMA imagem, use o valor mais completo\n"
+        f"- Campos como SA aparecem no TOPO de todas as abas\n"
+        f"- Converta texto para MAIÚSCULAS (exceto telefone e documento — mantenha como está)\n"
+        f"- Se realmente não encontrar um campo em NENHUMA imagem, use string vazia \"\"\n"
+        f"- NÃO invente dados — só extraia o que estiver visível\n\n"
+        f"📤 RETORNE EXATAMENTE ESTE JSON (preencha com os valores encontrados):\n"
         f"{{{campos_json}}}"
     )
 
@@ -559,7 +591,7 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
         return result
 
     # Envia todas as imagens de uma vez — 1 chamada só, modelo vê todas as abas juntas.
-    logger.info(f"[OCR] Enviando {len(images)} imagem(ns) para extração...")
+    logger.info(f"[OCR] Enviando {len(images)} imagem(ns) para extração (máscara: {tipo_mascara})...")
     response_text = await _call_groq_vision(system, user, images, json_mode=True)
     try:
         data = json.loads(response_text)
@@ -568,5 +600,6 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
         return {}
 
     resultado = normalizar(data)
-    logger.info(f"[OCR] Resultado final: {resultado}")
+    campos_preenchidos = [k for k, v in resultado.items() if v]
+    logger.info(f"[OCR] Resultado: {len(campos_preenchidos)}/{len(resultado)} campos preenchidos → {resultado}")
     return resultado

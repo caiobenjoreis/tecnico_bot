@@ -504,9 +504,24 @@ async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
+    
+    # Feedback do OCR: mostra ao usuário o que foi extraído das imagens
+    tipo = context.user_data.get('tipo_mascara')
+    if imgs and dados:
+        campos_preenchidos = [k for k, v in dados.items() if v]
+        campos_vazios = [k for k, v in dados.items() if not v]
+        if campos_preenchidos:
+            preenchidos_str = '\n'.join([f'  ✅ `{k}`: {dados[k][:50]}' for k in campos_preenchidos])
+            msg_ocr = f'📸 *OCR:* {len(campos_preenchidos)}/{len(dados)} campos detectados:\n{preenchidos_str}'
+        else:
+            msg_ocr = '⚠️ *OCR:* Nenhum campo foi detectado nas imagens. Você precisará preencher tudo manualmente.'
+        if campos_vazios:
+            msg_ocr += f'\n\n🖊️ *Campos não encontrados:* {", ".join(campos_vazios)}'
+        await reply(msg_ocr)
+    elif not imgs:
+        await reply('ℹ️ Nenhuma imagem enviada. Preencha os dados manualmente.')
 
     # Agora perguntar informações complementares baseado no tipo
-    tipo = context.user_data.get('tipo_mascara')
     
     if tipo == 'Batimento CDOE':
         await reply(
