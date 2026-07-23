@@ -234,15 +234,11 @@ async def _call_groq_vision(
     # Modelos em ordem de preferência (usando modelos disponíveis no Groq)
     models = [
         GROQ_MODEL or "qwen/qwen3.6-27b",
-        # Add other models if needed, but qwen/qwen3.6-27b is the only one with image support right now
     ]
     logger.info(f"[OCR] Modelos a tentar: {models}")
     
-    # Comprime e redimensiona imagens — com múltiplas imagens numa chamada só,
-    # precisa comprimir para caber no limite de tokens do Groq.
-    # 768px / qualidade 75 → ~50-80KB por imagem → cabe até 5 imagens mantendo texto legível.
+    # Comprime e redimensiona imagens — 768px / qualidade 75.
     def compress_image(img_bytes: bytes, max_size: int = 768, quality: int = 75) -> bytes:
-        """Redimensiona e comprime imagem para caber no limite de tokens do Groq."""
         try:
             from PIL import Image
             import io as _io
@@ -259,12 +255,10 @@ async def _call_groq_vision(
             logger.warning(f"[OCR] Falha ao comprimir imagem: {e} — usando original")
             return img_bytes
 
-    # Enviar todas as imagens numa única chamada (modelo suporta até 5).
-    # Se houver mais de 5, avisa no log quais estão sendo cortadas.
-    total_images = len(images)
-    limited_images = images[:5]
-    if total_images > 5:
-        logger.warning(f"[OCR] {total_images} imagens recebidas, mas apenas as 5 primeiras serão enviadas (limite do modelo)")
+    # Modelo qwen suporta até 3 imagens. Se houver mais, o chamador faz batching.
+    limited_images = images[:3]
+    if len(images) > 3:
+        logger.warning(f"[OCR] {len(images)} imagens recebidas — apenas as 3 primeiras serão enviadas (limite do modelo)")
     compressed_images = [compress_image(img) for img in limited_images]
     logger.info(f"[OCR] Enviando {len(compressed_images)} imagem(ns) numa única chamada")
 
@@ -285,14 +279,11 @@ async def _call_groq_vision(
         for model in models:
             logger.info(f"[OCR] Tentando modelo: {model}")
             try:
-                # Adicionar timeout para evitar travamentos
                 async def call_api():
-                    # Para o modelo qwen/qwen3.6-27b com visão, a documentação oficial do Groq
-                    # recomenda incluir as instruções diretamente no user message junto com a imagem.
-                    # Ref: https://console.groq.com/docs/vision
+                    # Groq qwen vision: instruções no user message junto com a imagem
                     user_content_with_system = [
                         {"type": "text", "text": f"{system_prompt}\n\n{content[0]['text']}"}
-                    ] + content[1:]  # mantém as imagens
+                    ] + content[1:]
 
                     kwargs = {
                         "model": model,
@@ -303,15 +294,10 @@ async def _call_groq_vision(
                         "max_completion_tokens": 1024,
                     }
 
-                    # NÃO usar json_mode forçado — o modelo qwen às vezes falha com 400
-                    # json_validate_failed quando não consegue gerar JSON válido para a imagem.
-                    # Em vez disso, pedimos texto livre e extraímos o JSON com regex abaixo.
-                    # Se json_mode=True, tentamos primeiro com response_format; se falhar 400,
-                    # retentamos sem response_format.
+                    # json_mode só na primeira tentativa (evita 400 json_validate_failed)
                     if json_mode and attempt == 0:
                         kwargs["response_format"] = {"type": "json_object"}
                     
-                    # Groq client é síncrono, então rodamos em executor
                     loop = asyncio.get_running_loop()
                     resp = await loop.run_in_executor(
                         None,
@@ -319,7 +305,6 @@ async def _call_groq_vision(
                     )
                     return resp.choices[0].message.content or ("{}" if json_mode else "")
                 
-                # Aplicar timeout
                 result = await asyncio.wait_for(call_api(), timeout=timeout_seconds)
                 logger.info(f"[OCR] Sucesso com modelo {model}! Resultado: {result[:200]}...")
                 return result
@@ -330,7 +315,6 @@ async def _call_groq_vision(
                 continue
                 
             except Exception as e:
-                # Se for 400 json_validate_failed, retry imediato sem response_format
                 err_str = str(e)
                 if "json_validate_failed" in err_str or "400" in err_str:
                     logging.warning(f"[OCR] 400 json_validate_failed — retentando sem response_format")
@@ -352,7 +336,6 @@ async def _call_groq_vision(
                             )
                             return r.choices[0].message.content or ""
                         raw = await asyncio.wait_for(call_api_no_json(), timeout=timeout_seconds)
-                        # Extrair JSON do texto livre
                         m = re.search(r"\{.*\}", raw, re.DOTALL)
                         if m:
                             logger.info(f"[OCR] Fallback sem json_mode funcionou!")
@@ -363,7 +346,6 @@ async def _call_groq_vision(
                 logging.warning(f"Groq vision falhou (tentativa {attempt+1}, modelo {model}): {type(e).__name__}: {e}", exc_info=False)
                 continue
         
-        # Se falhou com todos os modelos, sem mais retries
         if attempt < retries:
             wait_time = 2
             logger.info(f"[OCR] Aguardando {wait_time}s antes da próxima tentativa...")
@@ -389,8 +371,8 @@ async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
             match = re.search(r"\{.*\}", response_text, re.DOTALL)
             if match:
                 data = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            logger.warning(f"[OCR] extrair_campos_por_imagem: fallback JSON também falhou. Resposta: {response_text[:200]!r}")
+        except:
+            pass
 
     # Normalização e Validação
     sa = str(data.get("sa") or "").strip().upper()
@@ -459,8 +441,7 @@ async def extrair_campo_especifico(images: List[bytes], campo: str) -> dict:
     
     try:
         data = json.loads(response_text)
-    except json.JSONDecodeError as e:
-        logger.warning(f"[OCR] extrair_campo_especifico '{campo}': falha ao parsear JSON. Erro: {e}. Resposta: {response_text[:200]!r}")
+    except:
         return {}
 
     # Validação específica
@@ -491,30 +472,29 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
     Extrai todos os dados possíveis de uma ou mais imagens para preenchimento de máscaras.
     Se tipo_mascara for fornecido, foca nos campos específicos daquela máscara.
 
-    IMPORTANTE: Cada imagem é uma ABA diferente do mesmo ticket (INFO, CLIENTE,
-    REDE, etc.). O modelo DEVE analisar TODAS as imagens e COMBINAR os dados
-    extraídos de cada aba para preencher o JSON completo.
+    As imagens são ABAS DIFERENTES do mesmo ticket (INFO, CLIENTE, REDE).
+    Se houver mais de 3 imagens, processa em lotes e faz merge dos resultados.
     """
-    # Define campos e onde encontrar cada um, por tipo de máscara.
+    # Mapa de campos por tipo de máscara: (nome, onde_encontrar)
     if tipo_mascara == 'Batimento CDOE':
         campos_json = '"atividade":"","estacao":"","cdo":"","porta":"","gpon":""'
         mapa_campos = [
-            ("atividade",   "aba INFO → campo 'Atividade' (ex: INSTALAÇÃO BL FIBRA)"),
-            ("estacao",     "aba REDE → campo 'Estação', 'EST' ou 'Central'"),
+            ("atividade",   "aba INFO → campo 'Atividade' (ex: INSTALACAO BL FIBRA)"),
+            ("estacao",     "aba REDE → campo 'Estacao', 'EST' ou 'Central'"),
             ("cdo",         "aba REDE → campo 'CDOPath' (parte antes de '.PTP', ex: CDOI-1220.2) ou 'CDO'/'CDOE'"),
-            ("porta",       "aba REDE → número após 'PTP.FO.O:' no campo CDOPath (ex: 1) ou campo 'Porta'"),
+            ("porta",       "aba REDE → numero apos 'PTP.FO.O:' no CDOPath (ex: 1) ou campo 'Porta'"),
             ("gpon",        "aba REDE → campo 'Acesso GPON' (ex: A0002VH1E)"),
         ]
     elif tipo_mascara == 'Pendência':
         campos_json = '"atividade":"","sa":"","documento":"","gpon":"","cliente":"","telefone":"","endereco":""'
         mapa_campos = [
             ("sa",          "TOPO DA TELA em QUALQUER aba → 'SA' (ex: SA-37285421)"),
-            ("atividade",   "aba INFO → campo 'Atividade' (ex: INSTALAÇÃO BL FIBRA)"),
+            ("atividade",   "aba INFO → campo 'Atividade' (ex: INSTALACAO BL FIBRA)"),
             ("documento",   "aba INFO → campo 'Doc. Assoc.' (ex: 10426209)"),
             ("gpon",        "aba REDE → campo 'Acesso GPON' (ex: A0002VH1E)"),
             ("cliente",     "aba CLIENTE ou INFO → campo 'Cliente'"),
-            ("telefone",    "aba CLIENTE → campo 'Contato 1' ou 'Contato Principal' (ex: 47997849329)"),
-            ("endereco",    "aba CLIENTE ou INFO → campo 'Endereço' (rua, número, bairro, CEP, cidade)"),
+            ("telefone",    "aba CLIENTE → campo 'Contato 1' ou 'Contato Principal'"),
+            ("endereco",    "aba CLIENTE ou INFO → campo 'Endereco' (rua, numero, bairro, CEP, cidade)"),
         ]
     elif tipo_mascara == 'Cancelamento':
         campos_json = '"sa":"","documento":"","telefone":"","cliente":""'
@@ -531,8 +511,8 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
             ("gpon",        "aba REDE → campo 'Acesso GPON' (ex: A0002VH1E)"),
             ("documento",   "aba INFO → campo 'Doc. Assoc.' (ex: 10426209)"),
             ("cdo",         "aba REDE → campo 'CDOPath' (parte antes de '.PTP', ex: CDOI-1220.2)"),
-            ("porta",       "aba REDE → número após 'PTP.FO.O:' no campo CDOPath (ex: 1)"),
-            ("endereco",    "aba CLIENTE ou INFO → campo 'Endereço'"),
+            ("porta",       "aba REDE → numero apos 'PTP.FO.O:' no CDOPath (ex: 1)"),
+            ("endereco",    "aba CLIENTE ou INFO → campo 'Endereco'"),
             ("cliente",     "aba CLIENTE ou INFO → campo 'Cliente'"),
             ("telefone",    "aba CLIENTE → campo 'Contato 1' ou 'Contato Principal'"),
         ]
@@ -544,39 +524,22 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
             ("cliente",     "aba CLIENTE → 'Cliente'"),
             ("documento",   "aba INFO → 'Doc. Assoc.'"),
             ("telefone",    "aba CLIENTE → 'Contato 1'"),
-            ("endereco",    "aba CLIENTE → 'Endereço'"),
+            ("endereco",    "aba CLIENTE → 'Endereco'"),
             ("cdo",         "aba REDE → 'CDOPath' ou 'CDO'"),
-            ("porta",       "aba REDE → número após 'PTP.FO.O:'"),
-            ("estacao",     "aba REDE → 'Estação' ou 'Central'"),
+            ("porta",       "aba REDE → numero apos 'PTP.FO.O:'"),
+            ("estacao",     "aba REDE → 'Estacao' ou 'Central'"),
             ("atividade",   "aba INFO → 'Atividade'"),
         ]
 
-    instrucoes_campos = "\n".join([f"  • {nome}: {onde}" for nome, onde in mapa_campos])
+    instrucoes_campos = "\n".join([f"  o {nome}: {onde}" for nome, onde in mapa_campos])
 
     system = (
-        "Você é um OCR especializado em extrair dados de prints de sistemas de telecomunicações. "
-        "Você receberá MÚLTIPLAS imagens que são ABAS DIFERENTES de um MESMO TICKET "
+        "Voce e um OCR especializado em extrair dados de prints de sistemas de telecomunicacoes. "
+        "Recebera MULTIPLAS imagens que sao ABAS DIFERENTES de um MESMO TICKET "
         "(ex: INFO, CLIENTE, REDE). Analise CADA IMAGEM individualmente e COMBINE "
-        "as informações de TODAS as abas para preencher o JSON. "
-        "NÃO retorne campo vazio se a informação estiver visível em QUALQUER uma das imagens. "
-        "Retorne APENAS JSON válido."
-    )
-
-    user = (
-        f"🎯 TAREFA: Extrair dados para máscara '{tipo_mascara or 'Geral'}'.\n\n"
-        f"⚠️ IMPORTANTE: Você está vendo {len(images)} ABAS DIFERENTES DO MESMO TICKET. "
-        f"Os dados estão ESPALHADOS entre elas — olhe TODAS as imagens com atenção!\n\n"
-        f"📋 ONDE ENCONTRAR CADA CAMPO (em qual aba e label):\n"
-        f"{instrucoes_campos}\n\n"
-        f"💡 REGRAS:\n"
-        f"- Analise IMAGEM POR IMAGEM e anote tudo que encontrar\n"
-        f"- Se um campo aparecer em MAIS DE UMA imagem, use o valor mais completo\n"
-        f"- Campos como SA aparecem no TOPO de todas as abas\n"
-        f"- Converta texto para MAIÚSCULAS (exceto telefone e documento — mantenha como está)\n"
-        f"- Se realmente não encontrar um campo em NENHUMA imagem, use string vazia \"\"\n"
-        f"- NÃO invente dados — só extraia o que estiver visível\n\n"
-        f"📤 RETORNE EXATAMENTE ESTE JSON (preencha com os valores encontrados):\n"
-        f"{{{campos_json}}}"
+        "as informacoes de TODAS as abas para preencher o JSON. "
+        "NAO retorne campo vazio se a informacao estiver visivel em QUALQUER imagem. "
+        "Retorne APENAS JSON valido."
     )
 
     def normalizar(data: dict) -> dict:
@@ -590,16 +553,51 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
                 result[k] = str(v).strip().upper()
         return result
 
-    # Envia todas as imagens de uma vez — 1 chamada só, modelo vê todas as abas juntas.
-    logger.info(f"[OCR] Enviando {len(images)} imagem(ns) para extração (máscara: {tipo_mascara})...")
-    response_text = await _call_groq_vision(system, user, images, json_mode=True)
-    try:
-        data = json.loads(response_text)
-    except json.JSONDecodeError as e:
-        logger.error(f"[OCR] JSON inválido. Erro: {e}. Resposta: {response_text[:300]!r}")
-        return {}
+    def merge_resultados(acumulado: dict, novo: dict) -> dict:
+        for k, v in novo.items():
+            if v and not acumulado.get(k):
+                acumulado[k] = v
+        return acumulado
 
-    resultado = normalizar(data)
+    def construir_user_prompt(num_imagens: int, lote_info: str = "") -> str:
+        lote_str = f" ({lote_info})" if lote_info else ""
+        return (
+            f"TAREFA: Extrair dados para mascara '{tipo_mascara or 'Geral'}'{lote_str}.\n\n"
+            f"IMPORTANTE: Estas sao {num_imagens} ABAS DIFERENTES DO MESMO TICKET. "
+            f"Os dados estao ESPALHADOS entre elas — olhe TODAS as imagens com atencao!\n\n"
+            f"ONDE ENCONTRAR CADA CAMPO (qual aba e label):\n"
+            f"{instrucoes_campos}\n\n"
+            f"REGRAS:\n"
+            f"- Analise IMAGEM POR IMAGEM e anote tudo que encontrar\n"
+            f"- Se um campo aparecer em MAIS DE UMA imagem, use o valor mais completo\n"
+            f"- Campos como SA aparecem no TOPO de todas as abas\n"
+            f"- Converta texto para MAIUSCULAS (exceto telefone e documento)\n"
+            f"- Se nao encontrar um campo em NENHUMA imagem, use string vazia \"\"\n"
+            f"- NAO invente dados — so extraia o que estiver visivel\n\n"
+            f"RETORNE EXATAMENTE ESTE JSON (preencha com os valores encontrados):\n"
+            f"{{{campos_json}}}"
+        )
+
+    # Batching: modelo suporta ate 3 imagens por chamada.
+    MAX_POR_LOTE = 3
+    lotes = [images[i:i+MAX_POR_LOTE] for i in range(0, len(images), MAX_POR_LOTE)]
+    logger.info(f"[OCR] extrair_dados_completos: {len(images)} imagens → {len(lotes)} lote(s) (mascara: {tipo_mascara})")
+
+    resultado = {}
+    for idx_batch, lote in enumerate(lotes):
+        lote_info = f"LOTE {idx_batch+1}/{len(lotes)}" if len(lotes) > 1 else ""
+        user = construir_user_prompt(len(lote), lote_info)
+        response_text = await _call_groq_vision(system, user, lote, json_mode=True)
+        try:
+            batch_data = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            logger.warning(f"[OCR] Lote {idx_batch+1}/{len(lotes)}: JSON invalido, pulando. Erro: {e}")
+            continue
+        batch_normalizado = normalizar(batch_data)
+        batch_preenchidos = [k for k, v in batch_normalizado.items() if v]
+        logger.info(f"[OCR] Lote {idx_batch+1}/{len(lotes)}: {len(batch_preenchidos)} campos → {batch_normalizado}")
+        resultado = merge_resultados(resultado, batch_normalizado)
+
     campos_preenchidos = [k for k, v in resultado.items() if v]
-    logger.info(f"[OCR] Resultado: {len(campos_preenchidos)}/{len(resultado)} campos preenchidos → {resultado}")
+    logger.info(f"[OCR] Resultado final (merge de {len(lotes)} lote(s)): {len(campos_preenchidos)}/{len(resultado)} campos → {resultado}")
     return resultado
