@@ -238,10 +238,9 @@ async def _call_groq_vision(
     ]
     logger.info(f"[OCR] Modelos a tentar: {models}")
     
-    # Preparar conteúdo do usuário
-    # Comprime e redimensiona imagens para ficar dentro do limite de 8000 tokens do Groq free tier.
-    # Estimativa: 1 token ≈ 750 chars base64. Uma imagem 512x512 JPEG q60 fica ~100-150KB → ~5000 tokens.
-    def compress_image(img_bytes: bytes, max_size: int = 512, quality: int = 60) -> bytes:
+    # Comprime e redimensiona imagens — equilíbrio entre qualidade OCR e limite de tokens do Groq.
+    # 800px / qualidade 70 → ~80-120KB → ~3500-5000 tokens. Deixa margem para o prompt e resposta.
+    def compress_image(img_bytes: bytes, max_size: int = 800, quality: int = 70) -> bytes:
         """Redimensiona e comprime imagem para caber no limite de tokens do Groq."""
         try:
             from PIL import Image
@@ -259,8 +258,7 @@ async def _call_groq_vision(
             logger.warning(f"[OCR] Falha ao comprimir imagem: {e} — usando original")
             return img_bytes
 
-    # Usa apenas 1 imagem para garantir que ficamos dentro do limite de 8000 tokens.
-    # O prompt das máscaras já consome ~1500 tokens, então só sobra espaço para 1 imagem.
+    # 1 imagem por chamada para controlar tokens
     limited_images = images[:1]
     compressed_images = [compress_image(img) for img in limited_images]
     logger.info(f"[OCR] Imagens: {len(images)} recebidas, enviando {len(compressed_images)} ao Groq")
@@ -298,7 +296,7 @@ async def _call_groq_vision(
                             {"role": "user", "content": user_content_with_system}
                         ],
                         "temperature": 0.1,
-                        "max_completion_tokens": 512,
+                        "max_completion_tokens": 1024,
                     }
                     
                     if json_mode:
@@ -455,91 +453,33 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
     Extrai todos os dados possíveis de uma ou mais imagens para preenchimento de máscaras.
     Se tipo_mascara for fornecido, foca nos campos específicos daquela máscara.
     """
-
-    
-    # Instruções detalhadas para cada campo
-
-    
-    # Personalização por tipo de máscara para máximo foco
+    # Prompt curto e direto — prompts longos consomem tokens demais no free tier do Groq
+    # e confundem o modelo. Foco nos campos essenciais de cada tipo de máscara.
     if tipo_mascara == 'Batimento CDOE':
-        campos_requeridos = ['atividade', 'estacao', 'cdo', 'porta', 'gpon']
-        instrucoes_extras = (
-            "\n⚠️ CRÍTICO para Batimento CDOE:\n"
-            "- ATIVIDADE: Identifique o tipo de serviço/atividade\n"
-            "- ESTAÇÃO: Localize código da estação/armário\n"
-            "- CDOE: ESSENCIAL - Código da caixa de distribuição\n"
-            "- PORTA: ESSENCIAL - Número da porta na CDO\n"
-            "- GPON: Código de acesso GPON/designação\n"
-        )
+        campos_json = '"atividade":"","estacao":"","cdo":"","porta":"","gpon":""'
+        foco = "atividade/serviço, estação/armário, código CDO/CDOE, número de porta, código GPON/acesso"
     elif tipo_mascara == 'Pendência':
-        campos_requeridos = ['atividade', 'sa', 'documento', 'gpon', 'cliente', 'telefone', 'endereco']
-        instrucoes_extras = (
-            "\n⚠️ CRÍTICO para Pendência:\n"
-            "- ATIVIDADE: Tipo de serviço (Instalação/Reparo/etc)\n"
-            "- SA: ESSENCIAL - Número da SA/Ordem de Serviço\n"
-            "- DOCUMENTO: ESSENCIAL - CPF/CNPJ (procure 'Doc. Assoc.')\n"
-            "- GPON: Acesso/Designação GPON\n"
-            "- CLIENTE: Nome completo do cliente\n"
-            "- TELEFONE: Número de contato\n"
-            "- ENDEREÇO: Endereço completo (rua, número, bairro)\n"
-        )
+        campos_json = '"atividade":"","sa":"","documento":"","gpon":"","cliente":"","telefone":"","endereco":""'
+        foco = "atividade, número SA, doc/CPF (Doc. Assoc.), GPON/acesso, nome cliente, telefone, endereço"
     elif tipo_mascara == 'Cancelamento':
-        campos_requeridos = ['sa', 'documento', 'telefone', 'cliente']
-        instrucoes_extras = (
-            "\n⚠️ CRÍTICO para Cancelamento:\n"
-            "- SA: ESSENCIAL - Número do Pedido/SA\n"
-            "- DOCUMENTO: ESSENCIAL - CPF/CNPJ/Doc. Assoc.\n"
-            "- TELEFONE: Número de contato\n"
-            "- CLIENTE: Nome do cliente\n"
-        )
+        campos_json = '"sa":"","documento":"","telefone":"","cliente":""'
+        foco = "número SA/pedido, documento/CPF (Doc. Assoc.), telefone, nome cliente"
     elif tipo_mascara == 'Repasse':
-        campos_requeridos = ['sa', 'gpon', 'documento', 'cdo', 'porta', 'endereco', 'cliente', 'telefone']
-        instrucoes_extras = (
-            "\n⚠️ CRÍTICO para Repasse:\n"
-            "- SA: ESSENCIAL - Número da SA\n"
-            "- GPON: ESSENCIAL - Acesso GPON\n"
-            "- DOCUMENTO: ESSENCIAL - Doc. Assoc./CPF (campo muito importante!)\n"
-            "- CDO: Código da caixa CDO\n"
-            "- PORTA: Número da porta\n"
-            "- ENDEREÇO: Endereço completo\n"
-            "- CLIENTE: Nome do cliente\n"
-            "- TELEFONE: Contato\n"
-        )
+        campos_json = '"sa":"","gpon":"","documento":"","cdo":"","porta":"","endereco":"","cliente":"","telefone":""'
+        foco = "número SA, GPON/acesso, documento/CPF (Doc. Assoc.), CDO, porta, endereço, nome cliente, telefone"
     else:
-        campos_requeridos = ['sa', 'gpon', 'cliente', 'documento', 'telefone', 'endereco', 'cdo', 'porta', 'estacao', 'atividade']
-        instrucoes_extras = "\n⚠️ Extraia TODOS os campos disponíveis nas imagens."
-    
-    # Construir prompt com instruções detalhadas
-    instrucoes_campos = "\n".join([f"- {campo}: {CAMPO_INSTRUCOES[campo]}" for campo in campos_requeridos if campo in CAMPO_INSTRUCOES])
-    
+        campos_json = '"sa":"","gpon":"","cliente":"","documento":"","telefone":"","endereco":"","cdo":"","porta":"","estacao":"","atividade":""'
+        foco = "todos os campos visíveis"
+
+    system = "Você é um OCR especializado em extrair dados de prints de sistemas de telecomunicações. Retorne APENAS JSON válido."
+
     user = (
-        f"🎯 TAREFA: Extrair dados para máscara '{tipo_mascara or 'Geral'}'\n\n"
-        f"📋 CAMPOS OBRIGATÓRIOS:{instrucoes_extras}\n\n"
-        f"🔍 ONDE PROCURAR CADA CAMPO:\n{instrucoes_campos}\n\n"
-        "💡 DICAS ESPECÍFICAS PARA ESSE APP:\n"
-        "- As imagens são ABAS DIFERENTES DE UM MESMO TICKET (INFO, CLIENTE, REDE, etc.)\n"
-        "- Analise TODAS as imagens e COMBINE as informações delas\n"
-        "- Procure em títulos, labels, campos, tabelas\n"
-        "- Se encontrar apenas parte da informação, use-a\n"
-        "- Converta tudo para MAIÚSCULAS\n"
-        "- Remove espaços extras, mas mantenha formatação de CPF/telefone se houver\n"
-        "- Se um campo realmente não existir na imagem, use string vazia\n\n"
-        "📤 FORMATO DE SAÍDA (JSON):\n"
-        "{\n"
-        '  "sa": "...",\n'
-        '  "gpon": "...",\n'
-        '  "cliente": "...",\n'
-        '  "documento": "...",\n'
-        '  "telefone": "...",\n'
-        '  "endereco": "...",\n'
-        '  "cdo": "...",\n'
-        '  "porta": "...",\n'
-        '  "estacao": "...",\n'
-        '  "atividade": "..."\n'
-        "}"
+        f"Extraia do print: {foco}.\n"
+        f"Retorne exatamente este JSON preenchido com os valores encontrados (string vazia se não encontrar):\n"
+        f"{{{campos_json}}}"
     )
 
-    response_text = await _call_groq_vision(OCR_SYSTEM_MASK, user, images, json_mode=True)
+    response_text = await _call_groq_vision(system, user, images, json_mode=True)
     
     try:
         data = json.loads(response_text)
