@@ -453,23 +453,56 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
     Extrai todos os dados possíveis de uma ou mais imagens para preenchimento de máscaras.
     Se tipo_mascara for fornecido, foca nos campos específicos daquela máscara.
     """
-    # Prompt curto e direto — prompts longos consomem tokens demais no free tier do Groq
-    # e confundem o modelo. Foco nos campos essenciais de cada tipo de máscara.
+    # Prompt curto e direto com labels exatos do app para cada tipo de máscara.
     if tipo_mascara == 'Batimento CDOE':
         campos_json = '"atividade":"","estacao":"","cdo":"","porta":"","gpon":""'
-        foco = "atividade/serviço, estação/armário, código CDO/CDOE, número de porta, código GPON/acesso"
+        foco = (
+            "SA (no topo da tela, ex: SA-37285421), "
+            "atividade (campo 'Atividade' na aba INFO, ex: INSTALAÇÃO BL FIBRA), "
+            "estação/armário (campo 'Estação', 'EST' ou 'Central'), "
+            "CDO/CDOE (campos 'CDO', 'CDOE', 'CDOPath' ou 'Caixa'), "
+            "porta (campo 'Porta', 'Port' ou número após 'PTP.FO.O:'), "
+            "GPON (campo 'Acesso GPON', ex: A0002VH1E)"
+        )
     elif tipo_mascara == 'Pendência':
         campos_json = '"atividade":"","sa":"","documento":"","gpon":"","cliente":"","telefone":"","endereco":""'
-        foco = "atividade, número SA, doc/CPF (Doc. Assoc.), GPON/acesso, nome cliente, telefone, endereço"
+        foco = (
+            "SA (no topo da tela, ex: SA-37285421), "
+            "atividade (campo 'Atividade' na aba INFO, ex: INSTALAÇÃO BL FIBRA), "
+            "documento (campo 'Doc. Assoc.' na aba INFO), "
+            "GPON (campo 'Acesso GPON' na aba Rede, ex: A0002VH1E), "
+            "cliente (campo 'Cliente'), "
+            "telefone (campo 'Contato 1' ou 'Contato Principal'), "
+            "endereço completo (campo 'Endereço')"
+        )
     elif tipo_mascara == 'Cancelamento':
         campos_json = '"sa":"","documento":"","telefone":"","cliente":""'
-        foco = "número SA/pedido, documento/CPF (Doc. Assoc.), telefone, nome cliente"
+        foco = (
+            "SA (no topo da tela, ex: SA-37285421), "
+            "documento (campo 'Doc. Assoc.' na aba INFO), "
+            "telefone (campo 'Contato 1' ou 'Contato Principal'), "
+            "cliente (campo 'Cliente')"
+        )
     elif tipo_mascara == 'Repasse':
         campos_json = '"sa":"","gpon":"","documento":"","cdo":"","porta":"","endereco":"","cliente":"","telefone":""'
-        foco = "número SA, GPON/acesso, documento/CPF (Doc. Assoc.), CDO, porta, endereço, nome cliente, telefone"
+        foco = (
+            "SA (no topo da tela, ex: SA-37285421), "
+            "GPON (campo 'Acesso GPON', ex: A0002VH1E), "
+            "documento (campo 'Doc. Assoc.' na aba INFO), "
+            "CDO (campo 'CDOPath', use apenas a parte antes de '.PTP', ex: CDOI-1220.2), "
+            "porta (campo 'CDOPath', use o número após 'PTP.FO.O:', ex: 1), "
+            "endereço completo (campo 'Endereço'), "
+            "cliente (campo 'Cliente'), "
+            "telefone (campo 'Contato 1' ou 'Contato Principal')"
+        )
     else:
         campos_json = '"sa":"","gpon":"","cliente":"","documento":"","telefone":"","endereco":"","cdo":"","porta":"","estacao":"","atividade":""'
-        foco = "todos os campos visíveis"
+        foco = (
+            "SA (no topo, ex: SA-37285421), GPON (campo 'Acesso GPON'), "
+            "cliente (campo 'Cliente'), documento (campo 'Doc. Assoc.'), "
+            "telefone (campo 'Contato 1'), endereço (campo 'Endereço'), "
+            "CDO, porta, estação, atividade"
+        )
 
     system = "Você é um OCR especializado em extrair dados de prints de sistemas de telecomunicações. Retorne APENAS JSON válido."
 
@@ -479,24 +512,36 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
         f"{{{campos_json}}}"
     )
 
-    response_text = await _call_groq_vision(system, user, images, json_mode=True)
-    
-    try:
-        data = json.loads(response_text)
-    except json.JSONDecodeError as e:
-        logger.error(f"[OCR] extrair_dados_completos: falha ao parsear JSON da resposta. Erro: {e}. Resposta recebida: {response_text[:300]!r}")
-        return {}
-        
-    # Limpeza e normalização
-    result = {}
-    for k, v in data.items():
-        if v is None or v == "null":
-            result[k] = ""
-        else:
-            # Manter formatação original em telefone e documento (CPF pode ter pontuação)
-            if k in ['telefone', 'documento']:
+    def normalizar(data: dict) -> dict:
+        result = {}
+        for k, v in data.items():
+            if v is None or str(v).strip().lower() in ("null", "n/a", ""):
+                result[k] = ""
+            elif k in ['telefone', 'documento']:
                 result[k] = str(v).strip()
             else:
                 result[k] = str(v).strip().upper()
-    
-    return result
+        return result
+
+    def merge(base: dict, novo: dict) -> dict:
+        for k, v in novo.items():
+            if v and not base.get(k):
+                base[k] = v
+        return base
+
+    # Processa cada imagem individualmente e agrega — cada aba do app vira 1 chamada separada.
+    agregado = {}
+    for i, img in enumerate(images):
+        logger.info(f"[OCR] Processando imagem {i+1}/{len(images)}...")
+        response_text = await _call_groq_vision(system, user, [img], json_mode=True)
+        try:
+            data = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            logger.error(f"[OCR] Imagem {i+1}: JSON inválido. Erro: {e}. Resposta: {response_text[:200]!r}")
+            continue
+        norm = normalizar(data)
+        logger.info(f"[OCR] Imagem {i+1} extraiu: {norm}")
+        agregado = merge(agregado, norm)
+
+    logger.info(f"[OCR] Resultado agregado final: {agregado}")
+    return agregado
