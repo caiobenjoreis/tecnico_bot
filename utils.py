@@ -283,8 +283,7 @@ async def _call_groq_vision(
                 # Adicionar timeout para evitar travamentos
                 async def call_api():
                     # Para o modelo qwen/qwen3.6-27b com visão, a documentação oficial do Groq
-                    # recomenda incluir as instruções diretamente no user message junto com a imagem,
-                    # em vez de usar um system message separado. Isso evita o erro 400 json_validate_failed.
+                    # recomenda incluir as instruções diretamente no user message junto com a imagem.
                     # Ref: https://console.groq.com/docs/vision
                     user_content_with_system = [
                         {"type": "text", "text": f"{system_prompt}\n\n{content[0]['text']}"}
@@ -298,8 +297,13 @@ async def _call_groq_vision(
                         "temperature": 0.1,
                         "max_completion_tokens": 1024,
                     }
-                    
-                    if json_mode:
+
+                    # NÃO usar json_mode forçado — o modelo qwen às vezes falha com 400
+                    # json_validate_failed quando não consegue gerar JSON válido para a imagem.
+                    # Em vez disso, pedimos texto livre e extraímos o JSON com regex abaixo.
+                    # Se json_mode=True, tentamos primeiro com response_format; se falhar 400,
+                    # retentamos sem response_format.
+                    if json_mode and attempt == 0:
                         kwargs["response_format"] = {"type": "json_object"}
                     
                     # Groq client é síncrono, então rodamos em executor
@@ -321,9 +325,38 @@ async def _call_groq_vision(
                 continue
                 
             except Exception as e:
+                # Se for 400 json_validate_failed, retry imediato sem response_format
+                err_str = str(e)
+                if "json_validate_failed" in err_str or "400" in err_str:
+                    logging.warning(f"[OCR] 400 json_validate_failed — retentando sem response_format")
+                    try:
+                        async def call_api_no_json():
+                            uc = [
+                                {"type": "text", "text": f"{system_prompt}\n\n{content[0]['text']}"}
+                            ] + content[1:]
+                            kw = {
+                                "model": model,
+                                "messages": [{"role": "user", "content": uc}],
+                                "temperature": 0.1,
+                                "max_completion_tokens": 1024,
+                            }
+                            loop2 = asyncio.get_running_loop()
+                            r = await loop2.run_in_executor(
+                                None,
+                                lambda: client.chat.completions.create(**kw)
+                            )
+                            return r.choices[0].message.content or ""
+                        raw = await asyncio.wait_for(call_api_no_json(), timeout=timeout_seconds)
+                        # Extrair JSON do texto livre
+                        m = re.search(r"\{.*\}", raw, re.DOTALL)
+                        if m:
+                            logger.info(f"[OCR] Fallback sem json_mode funcionou!")
+                            return m.group(0)
+                    except Exception as e2:
+                        logging.warning(f"[OCR] Fallback sem json_mode também falhou: {e2}")
                 last_error = e
-                logging.warning(f"Groq vision falhou (tentativa {attempt+1}, modelo {model}): {type(e).__name__}: {e}", exc_info=True)
-                continue # Tenta próximo modelo
+                logging.warning(f"Groq vision falhou (tentativa {attempt+1}, modelo {model}): {type(e).__name__}: {e}", exc_info=False)
+                continue
         
         # Se falhou com todos os modelos, espera um pouco antes do próximo retry
         if attempt < retries:
@@ -530,8 +563,11 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
         return base
 
     # Processa cada imagem individualmente e agrega — cada aba do app vira 1 chamada separada.
+    # Delay entre chamadas para respeitar o rate limit do Groq free tier.
     agregado = {}
     for i, img in enumerate(images):
+        if i > 0:
+            await asyncio.sleep(3)  # 3s entre chamadas para evitar rate limit
         logger.info(f"[OCR] Processando imagem {i+1}/{len(images)}...")
         response_text = await _call_groq_vision(system, user, [img], json_mode=True)
         try:
