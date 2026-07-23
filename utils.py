@@ -217,8 +217,8 @@ async def _call_groq_vision(
     user_prompt: str,
     images: List[bytes],
     json_mode: bool = True,
-    retries: int = 2,
-    timeout_seconds: int = 30
+    retries: int = 1,
+    timeout_seconds: int = 15
 ) -> str:
     """
     Função centralizada para chamar a API de visão da Groq com retry, fallback de modelos e timeout.
@@ -238,9 +238,10 @@ async def _call_groq_vision(
     ]
     logger.info(f"[OCR] Modelos a tentar: {models}")
     
-    # Comprime e redimensiona imagens — equilíbrio entre qualidade OCR e limite de tokens do Groq.
-    # 800px / qualidade 70 → ~80-120KB → ~3500-5000 tokens. Deixa margem para o prompt e resposta.
-    def compress_image(img_bytes: bytes, max_size: int = 800, quality: int = 70) -> bytes:
+    # Comprime e redimensiona imagens — com múltiplas imagens numa chamada só,
+    # precisa comprimir mais para caber no limite de tokens do Groq (8000 TPM free tier).
+    # 512px / qualidade 65 → ~30-50KB por imagem → cabe até 5 imagens numa chamada.
+    def compress_image(img_bytes: bytes, max_size: int = 512, quality: int = 65) -> bytes:
         """Redimensiona e comprime imagem para caber no limite de tokens do Groq."""
         try:
             from PIL import Image
@@ -258,10 +259,11 @@ async def _call_groq_vision(
             logger.warning(f"[OCR] Falha ao comprimir imagem: {e} — usando original")
             return img_bytes
 
-    # 1 imagem por chamada para controlar tokens
-    limited_images = images[:1]
+    # Enviar todas as imagens numa única chamada (modelo suporta até 5).
+    # 1 chamada = rápido + sem rate limit + modelo vê todas as abas de uma vez.
+    limited_images = images[:5]
     compressed_images = [compress_image(img) for img in limited_images]
-    logger.info(f"[OCR] Imagens: {len(images)} recebidas, enviando {len(compressed_images)} ao Groq")
+    logger.info(f"[OCR] {len(images)} imagens recebidas, enviando {len(compressed_images)} numa única chamada")
 
     content = [{"type": "text", "text": user_prompt}]
     for idx, img in enumerate(compressed_images):
@@ -358,11 +360,11 @@ async def _call_groq_vision(
                 logging.warning(f"Groq vision falhou (tentativa {attempt+1}, modelo {model}): {type(e).__name__}: {e}", exc_info=False)
                 continue
         
-        # Se falhou com todos os modelos, espera um pouco antes do próximo retry
+        # Se falhou com todos os modelos, sem mais retries
         if attempt < retries:
-            wait_time = 2 ** attempt
+            wait_time = 2
             logger.info(f"[OCR] Aguardando {wait_time}s antes da próxima tentativa...")
-            await asyncio.sleep(wait_time)  # Backoff exponencial: 1s, 2s, 4s
+            await asyncio.sleep(wait_time)
 
     logging.error(f"Todas as tentativas de OCR falharam. Último erro: {last_error}")
     return "{}" if json_mode else ""
@@ -556,28 +558,15 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
                 result[k] = str(v).strip().upper()
         return result
 
-    def merge(base: dict, novo: dict) -> dict:
-        for k, v in novo.items():
-            if v and not base.get(k):
-                base[k] = v
-        return base
+    # Envia todas as imagens de uma vez — 1 chamada só, modelo vê todas as abas juntas.
+    logger.info(f"[OCR] Enviando {len(images)} imagem(ns) para extração...")
+    response_text = await _call_groq_vision(system, user, images, json_mode=True)
+    try:
+        data = json.loads(response_text)
+    except json.JSONDecodeError as e:
+        logger.error(f"[OCR] JSON inválido. Erro: {e}. Resposta: {response_text[:300]!r}")
+        return {}
 
-    # Processa cada imagem individualmente e agrega — cada aba do app vira 1 chamada separada.
-    # Delay entre chamadas para respeitar o rate limit do Groq free tier.
-    agregado = {}
-    for i, img in enumerate(images):
-        if i > 0:
-            await asyncio.sleep(3)  # 3s entre chamadas para evitar rate limit
-        logger.info(f"[OCR] Processando imagem {i+1}/{len(images)}...")
-        response_text = await _call_groq_vision(system, user, [img], json_mode=True)
-        try:
-            data = json.loads(response_text)
-        except json.JSONDecodeError as e:
-            logger.error(f"[OCR] Imagem {i+1}: JSON inválido. Erro: {e}. Resposta: {response_text[:200]!r}")
-            continue
-        norm = normalizar(data)
-        logger.info(f"[OCR] Imagem {i+1} extraiu: {norm}")
-        agregado = merge(agregado, norm)
-
-    logger.info(f"[OCR] Resultado agregado final: {agregado}")
-    return agregado
+    resultado = normalizar(data)
+    logger.info(f"[OCR] Resultado final: {resultado}")
+    return resultado
