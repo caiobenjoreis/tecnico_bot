@@ -698,25 +698,37 @@ async def _call_ocr_space(image: bytes) -> str:
             'apikey': OCR_SPACE_API_KEY,
         }
         
+        logger.info(f"[OCR.space] Enviando requisição para API (tamanho imagem: {len(image)} bytes)")
+        
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 'https://api.ocr.space/parse/image',
                 data=payload,
                 headers=headers
             ) as response:
+                logger.info(f"[OCR.space] Status da resposta: {response.status}")
                 result = await response.json()
+                logger.info(f"[OCR.space] Resposta completa: {result}")
                 
                 if result.get('IsErroredOnProcessing', False):
                     logger.warning(f"[OCR.space] Erro no processamento: {result.get('ErrorMessage', 'Desconhecido')}")
                     return ""
                 
-                if result.get('ParsedText'):
-                    text = result['ParsedText']
-                    logger.info(f"[OCR.space] Texto extraído: {len(text)} caracteres")
-                    return text
+                # Verificar se há resultados
+                parsed_results = result.get('ParsedResults', [])
+                if parsed_results and len(parsed_results) > 0:
+                    first_result = parsed_results[0]
+                    text = first_result.get('ParsedText', '')
+                    if text:
+                        logger.info(f"[OCR.space] Texto extraído: {len(text)} caracteres")
+                        logger.info(f"[OCR.space] Texto: {text[:200]}")
+                        return text
+                    else:
+                        logger.warning("[OCR.space] ParsedResults vazio ou sem ParsedText")
                 else:
-                    logger.warning("[OCR.space] Nenhum texto extraído")
-                    return ""
+                    logger.warning("[OCR.space] Nenhum ParsedResults na resposta")
+                
+                return ""
     
     except Exception as e:
         logger.warning(f"[OCR.space] Erro na chamada da API: {e}")
