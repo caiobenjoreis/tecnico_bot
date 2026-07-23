@@ -1,5 +1,5 @@
 from datetime import datetime
-from config import TZ, PONTOS_SERVICO, TABELA_FAIXAS, USE_GROQ, GROQ_API_KEY, GROQ_MODEL, CICLO_DIA_INICIO, CICLO_DIAS_TURBO
+from config import TZ, PONTOS_SERVICO, TABELA_FAIXAS, USE_GROQ, GROQ_API_KEY, GROQ_MODEL, CICLO_DIA_INICIO, CICLO_DIAS_TURBO, OCR_SPACE_API_KEY, USE_OCR_SPACE
 import base64
 import json
 import re
@@ -231,9 +231,11 @@ async def _call_groq_vision(
 
     client = Groq(api_key=GROQ_API_KEY)
     
-    # Modelos em ordem de preferência (usando modelos disponíveis no Groq)
+    # Modelos em ordem de preferência (usando modelos de visão mais recentes)
     models = [
-        GROQ_MODEL or "qwen/qwen3.6-27b",
+        GROQ_MODEL or "llama-3.2-11b-vision-preview",
+        "llama-3.2-90b-vision-preview",
+        "meta-llama/llama-4-scout-17b-16e-instruct",
     ]
     logger.info(f"[OCR] Modelos a tentar: {models}")
     
@@ -294,9 +296,9 @@ async def _call_groq_vision(
                         "max_completion_tokens": 512,
                     }
 
-                    # json_mode só na primeira tentativa (evita 400 json_validate_failed)
-                    if json_mode and attempt == 0:
-                        kwargs["response_format"] = {"type": "json_object"}
+                    # json_mode desativado para evitar erros de validação JSON
+                    # if json_mode and attempt == 0:
+                    #     kwargs["response_format"] = {"type": "json_object"}
                     
                     loop = asyncio.get_running_loop()
                     resp = await loop.run_in_executor(
@@ -306,7 +308,7 @@ async def _call_groq_vision(
                     return resp.choices[0].message.content or ("{}" if json_mode else "")
                 
                 result = await asyncio.wait_for(call_api(), timeout=timeout_seconds)
-                logger.info(f"[OCR] Sucesso com modelo {model}! Resultado: {result[:200]}...")
+                logger.info(f"[OCR] Sucesso com modelo {model}! Resultado: {result[:200] if result else 'VAZIO'}...")
                 return result
                 
             except asyncio.TimeoutError:
@@ -474,6 +476,8 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
 
     As imagens são ABAS DIFERENTES do mesmo ticket (INFO, CLIENTE, REDE).
     Se houver mais de 3 imagens, processa em lotes e faz merge dos resultados.
+
+    Fallback: Se Groq vision não estiver disponível, usa Tesseract OCR local.
     """
     # Mapa de campos por tipo de máscara: (nome, onde_encontrar)
     if tipo_mascara == 'Batimento CDOE':
@@ -562,19 +566,10 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
     def construir_user_prompt(num_imagens: int, lote_info: str = "") -> str:
         lote_str = f" ({lote_info})" if lote_info else ""
         return (
-            f"TAREFA: Extrair dados para mascara '{tipo_mascara or 'Geral'}'{lote_str}.\n\n"
-            f"IMPORTANTE: Estas sao {num_imagens} ABAS DIFERENTES DO MESMO TICKET. "
-            f"Os dados estao ESPALHADOS entre elas — olhe TODAS as imagens com atencao!\n\n"
-            f"ONDE ENCONTRAR CADA CAMPO (qual aba e label):\n"
+            f"Extraia os dados desta imagem para a mascara '{tipo_mascara or 'Geral'}'.\n\n"
+            f"Campos necessarios:\n"
             f"{instrucoes_campos}\n\n"
-            f"REGRAS:\n"
-            f"- Analise IMAGEM POR IMAGEM e anote tudo que encontrar\n"
-            f"- Se um campo aparecer em MAIS DE UMA imagem, use o valor mais completo\n"
-            f"- Campos como SA aparecem no TOPO de todas as abas\n"
-            f"- Converta texto para MAIUSCULAS (exceto telefone e documento)\n"
-            f"- Se nao encontrar um campo em NENHUMA imagem, use string vazia \"\"\n"
-            f"- NAO invente dados — so extraia o que estiver visivel\n\n"
-            f"RETORNE EXATAMENTE ESTE JSON (preencha com os valores encontrados):\n"
+            f"Retorne APENAS este JSON:\n"
             f"{{{campos_json}}}"
         )
 
@@ -587,11 +582,15 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
     for idx_batch, lote in enumerate(lotes):
         lote_info = f"LOTE {idx_batch+1}/{len(lotes)}" if len(lotes) > 1 else ""
         user = construir_user_prompt(len(lote), lote_info)
+        logger.info(f"[OCR] Chamando API para lote {idx_batch+1} com {len(lote)} imagens")
+        logger.info(f"[OCR] Prompt (primeiros 200 chars): {user[:200]}")
         response_text = await _call_groq_vision(system, user, lote, json_mode=True)
+        logger.info(f"[OCR] Response recebida (primeiros 200 chars): {response_text[:200] if response_text else 'VAZIA'}")
         try:
             batch_data = json.loads(response_text)
         except json.JSONDecodeError as e:
             logger.warning(f"[OCR] Lote {idx_batch+1}/{len(lotes)}: JSON invalido, pulando. Erro: {e}")
+            logger.warning(f"[OCR] Raw response: {response_text[:500]}")
             continue
         batch_normalizado = normalizar(batch_data)
         batch_preenchidos = [k for k, v in batch_normalizado.items() if v]
@@ -600,4 +599,187 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
 
     campos_preenchidos = [k for k, v in resultado.items() if v]
     logger.info(f"[OCR] Resultado final (merge de {len(lotes)} lote(s)): {len(campos_preenchidos)}/{len(resultado)} campos → {resultado}")
+    
+    # Fallback: Se não conseguiu extrair nada com Groq, tenta OCR.space
+    if not campos_preenchidos and len(resultado) == 0:
+        logger.warning("[OCR] Groq não extraiu dados, tentando OCR.space como fallback")
+        resultado = await extrair_dados_ocr_space(images, tipo_mascara)
+        logger.info(f"[OCR] Resultado OCR.space: {resultado}")
+    
+    return resultado
+
+async def extrair_dados_ocr_space(images: List[bytes], tipo_mascara: str = None) -> dict:
+    """
+    Fallback usando OCR.space API quando Groq vision não está disponível.
+    Extrai texto das imagens e tenta identificar campos usando regex.
+    """
+    # Mapa de regex para cada campo
+    regex_map = {
+        'sa': r'SA[-\s]?(\d+)',
+        'gpon': r'GPON[:\s]*([A-Z0-9]+)',
+        'documento': r'Doc\.?\s*Assoc\.?[:\s]*(\d+)',
+        'atividade': r'Atividade[:\s]*([A-Z\s]+)',
+        'cliente': r'Cliente[:\s]*([A-Z\s]+)',
+        'telefone': r'Contato[:\s]*(\d+)',
+        'endereco': r'Endereco[:\s]*([^\n]+)',
+        'cdo': r'CDOPath[:\s]*([^\s\.]+)',
+        'porta': r'PTP\.FO\.O[:\s]*(\d+)',
+        'estacao': r'Estacao[:\s]*([A-Z0-9]+)',
+    }
+    
+    resultado = {}
+    
+    for idx, img_bytes in enumerate(images):
+        try:
+            text = await _call_ocr_space(img_bytes)
+            
+            if not text:
+                logger.warning(f"[OCR.space] Imagem {idx+1}: nenhum texto extraído")
+                continue
+            
+            logger.info(f"[OCR.space] Imagem {idx+1}: {len(text)} caracteres extraídos")
+            
+            # Tentar extrair cada campo usando regex
+            for campo, regex in regex_map.items():
+                if campo not in resultado or not resultado[campo]:
+                    match = re.search(regex, text, re.IGNORECASE)
+                    if match:
+                        valor = match.group(1).strip()
+                        if valor:
+                            resultado[campo] = valor.upper()
+                            logger.info(f"[OCR.space] Campo {campo} encontrado: {valor}")
+        
+        except Exception as e:
+            logger.warning(f"[OCR.space] Erro ao processar imagem {idx+1}: {e}")
+    
+    # Filtrar campos baseados no tipo de máscara
+    if tipo_mascara:
+        campos_por_tipo = {
+            'Batimento CDOE': ['atividade', 'estacao', 'cdo', 'porta', 'gpon'],
+            'Pendência': ['sa', 'atividade', 'documento', 'gpon', 'cliente', 'telefone', 'endereco'],
+            'Cancelamento': ['sa', 'documento', 'telefone', 'cliente'],
+            'Repasse': ['sa', 'gpon', 'documento', 'cdo', 'porta', 'endereco', 'cliente', 'telefone'],
+        }
+        
+        campos_relevantes = campos_por_tipo.get(tipo_mascara, [])
+        resultado = {k: v for k, v in resultado.items() if k in campos_relevantes}
+    
+    return resultado
+
+async def _call_ocr_space(image: bytes) -> str:
+    """
+    Chama a API OCR.space para extrair texto de uma imagem.
+    Retorna o texto extraído ou string vazia em caso de erro.
+    """
+    if not USE_OCR_SPACE or not OCR_SPACE_API_KEY:
+        logger.warning("[OCR.space] OCR.space não configurado")
+        return ""
+    
+    try:
+        import aiohttp
+        import io as _io
+    except ImportError:
+        logger.warning("[OCR.space] aiohttp não instalado")
+        return ""
+    
+    try:
+        b64 = base64.b64encode(image).decode('ascii')
+        
+        payload = {
+            'base64Image': f'data:image/jpeg;base64,{b64}',
+            'language': 'por',
+            'isTable': True,
+            'OCREngine': 2,  # Engine 2 é mais preciso
+            'scale': True,
+            'detectOrientation': True,
+        }
+        
+        headers = {
+            'apikey': OCR_SPACE_API_KEY,
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                'https://api.ocr.space/parse/image',
+                data=payload,
+                headers=headers
+            ) as response:
+                result = await response.json()
+                
+                if result.get('IsErroredOnProcessing', False):
+                    logger.warning(f"[OCR.space] Erro no processamento: {result.get('ErrorMessage', 'Desconhecido')}")
+                    return ""
+                
+                if result.get('ParsedText'):
+                    text = result['ParsedText']
+                    logger.info(f"[OCR.space] Texto extraído: {len(text)} caracteres")
+                    return text
+                else:
+                    logger.warning("[OCR.space] Nenhum texto extraído")
+                    return ""
+    
+    except Exception as e:
+        logger.warning(f"[OCR.space] Erro na chamada da API: {e}")
+        return ""
+
+async def extrair_dados_tesseract(images: List[bytes], tipo_mascara: str = None) -> dict:
+    """
+    Fallback usando Tesseract OCR local quando Groq vision não está disponível.
+    Extrai texto das imagens e tenta identificar campos usando regex.
+    """
+    try:
+        import pytesseract
+        from PIL import Image
+        import io as _io
+    except ImportError:
+        logger.warning("[OCR] Tesseract não disponível (pytesseract ou PIL não instalado)")
+        return {}
+    
+    # Mapa de regex para cada campo
+    regex_map = {
+        'sa': r'SA[-\s]?(\d+)',
+        'gpon': r'GPON[:\s]*([A-Z0-9]+)',
+        'documento': r'Doc\.?\s*Assoc\.?[:\s]*(\d+)',
+        'atividade': r'Atividade[:\s]*([A-Z\s]+)',
+        'cliente': r'Cliente[:\s]*([A-Z\s]+)',
+        'telefone': r'Contato[:\s]*(\d+)',
+        'endereco': r'Endereco[:\s]*([^\n]+)',
+        'cdo': r'CDOPath[:\s]*([^\s\.]+)',
+        'porta': r'PTP\.FO\.O[:\s]*(\d+)',
+        'estacao': r'Estacao[:\s]*([A-Z0-9]+)',
+    }
+    
+    resultado = {}
+    
+    for idx, img_bytes in enumerate(images):
+        try:
+            img = Image.open(_io.BytesIO(img_bytes))
+            text = pytesseract.image_to_string(img, lang='por')
+            logger.info(f"[OCR Tesseract] Imagem {idx+1}: {len(text)} caracteres extraídos")
+            
+            # Tentar extrair cada campo usando regex
+            for campo, regex in regex_map.items():
+                if campo not in resultado or not resultado[campo]:
+                    match = re.search(regex, text, re.IGNORECASE)
+                    if match:
+                        valor = match.group(1).strip()
+                        if valor:
+                            resultado[campo] = valor.upper()
+                            logger.info(f"[OCR Tesseract] Campo {campo} encontrado: {valor}")
+        
+        except Exception as e:
+            logger.warning(f"[OCR Tesseract] Erro ao processar imagem {idx+1}: {e}")
+    
+    # Filtrar campos baseados no tipo de máscara
+    if tipo_mascara:
+        campos_por_tipo = {
+            'Batimento CDOE': ['atividade', 'estacao', 'cdo', 'porta', 'gpon'],
+            'Pendência': ['sa', 'atividade', 'documento', 'gpon', 'cliente', 'telefone', 'endereco'],
+            'Cancelamento': ['sa', 'documento', 'telefone', 'cliente'],
+            'Repasse': ['sa', 'gpon', 'documento', 'cdo', 'porta', 'endereco', 'cliente', 'telefone'],
+        }
+        
+        campos_relevantes = campos_por_tipo.get(tipo_mascara, [])
+        resultado = {k: v for k, v in resultado.items() if k in campos_relevantes}
+    
     return resultado
