@@ -250,11 +250,11 @@ async def _call_groq_vision(
     # o que estoura nosso timeout. O loop externo (retries=2) já cuida das retentativas.
     client = Groq(api_key=GROQ_API_KEY, max_retries=0)
     
-    # Modelos em ordem de preferência (usando modelos de visão mais recentes)
+    # Modelos em ordem de preferência — APENAS modelos válidos no Groq.
+    # llama-3.2-90b-vision-preview foi descontinuado (decommissioned) e
+    # meta-llama/llama-4-scout-17b-16e-instruct não existe (404).
     models = [
-        GROQ_MODEL or "llama-3.2-11b-vision-preview",
-        "llama-3.2-90b-vision-preview",
-        "meta-llama/llama-4-scout-17b-16e-instruct",
+        GROQ_MODEL or "qwen/qwen3.6-27b",
     ]
     logger.info(f"[OCR] Modelos a tentar: {models}")
     
@@ -369,8 +369,15 @@ async def _call_groq_vision(
                 continue
         
         if attempt < retries:
+            # Se for rate limit (429), esperar o tempo que a API pediu
+            # ("Please try again in Xs") — plano free: 8000 tokens/min.
             wait_time = 2
-            logger.info(f"[OCR] Aguardando {wait_time}s antes da próxima tentativa...")
+            err_str = str(last_error)
+            if "rate_limit" in err_str.lower() or "429" in err_str:
+                m = re.search(r"try again in ([\d.]+)s", err_str)
+                if m:
+                    wait_time = float(m.group(1)) + 1
+            logger.info(f"[OCR] Aguardando {wait_time:.0f}s antes da próxima tentativa...")
             await asyncio.sleep(wait_time)
 
     logging.error(f"Todas as tentativas de OCR falharam. Último erro: {last_error}")
@@ -429,14 +436,19 @@ async def extrair_campos_por_imagem(image_bytes: bytes) -> dict:
 async def extrair_campos_por_imagens(images: list) -> dict:
     """
     Processa múltiplas imagens e agrega os resultados.
+
+    OTIMIZAÇÃO (rate limit Groq free: 8000 tokens/min):
+    Processa apenas as ÚLTIMAS 2 imagens. O fluxo de autofill chama esta função
+    a cada foto nova, re-processando todas as acumuladas — com 3+ imagens isso
+    estoura o limite. As imagens anteriores já foram analisadas na chamada anterior.
     """
     agg = {"sa": None, "gpon": None, "serial_do_modem": None, "mesh": []}
     
-    # Processa cada imagem individualmente (poderíamos enviar todas juntas, mas a resolução pode cair)
-    # Para economizar tokens/chamadas, se tivermos muitas imagens, talvez enviar juntas seja melhor.
-    # O código original fazia loop. Vamos manter loop para garantir qualidade máxima por print.
-    
-    for img in images:
+    # Últimas 2 imagens apenas (as demais já foram processadas em chamadas anteriores)
+    imagens_para_processar = images[-2:] if len(images) > 2 else images
+    logger.info(f"[OCR] extrair_campos_por_imagens: {len(images)} imagem(ns) recebida(s), processando {len(imagens_para_processar)} (últimas)")
+
+    for img in imagens_para_processar:
         d = await extrair_campos_por_imagem(img)
         
         # Merge inteligente: Prioriza valores válidos sobre Nones
