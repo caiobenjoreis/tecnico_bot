@@ -212,6 +212,23 @@ def escape_markdown(text):
         text = text.replace(char, f'\\{char}')
     return text
 
+def _limpar_resposta_ocr(raw: str, json_mode: bool = True) -> str:
+    """
+    Limpa a resposta do modelo antes do parse:
+    - Remove blocos <think>...</think> (reasoning do qwen)
+    - Extrai o primeiro JSON {...} se houver texto ao redor
+    """
+    if not raw:
+        return "{}" if json_mode else ""
+    # Remover blocos de reasoning do modelo (ex: <think>...</think>)
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    # Extrair o primeiro JSON válido se houver texto ao redor
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if m:
+        raw = m.group(0)
+    raw = raw.strip()
+    return raw or ("{}" if json_mode else "")
+
 async def _call_groq_vision(
     system_prompt: str,
     user_prompt: str,
@@ -229,7 +246,9 @@ async def _call_groq_vision(
         logger.warning("[OCR] Groq não configurado, retornando vazio")
         return "{}" if json_mode else ""
 
-    client = Groq(api_key=GROQ_API_KEY)
+    # max_retries=0: o retry interno do client espera até 23s em rate limit (429),
+    # o que estoura nosso timeout. O loop externo (retries=2) já cuida das retentativas.
+    client = Groq(api_key=GROQ_API_KEY, max_retries=0)
     
     # Modelos em ordem de preferência (usando modelos de visão mais recentes)
     models = [
@@ -305,7 +324,8 @@ async def _call_groq_vision(
                         None,
                         lambda: client.chat.completions.create(**kwargs)
                     )
-                    return resp.choices[0].message.content or ("{}" if json_mode else "")
+                    raw = resp.choices[0].message.content or ("{}" if json_mode else "")
+                    return _limpar_resposta_ocr(raw, json_mode)
                 
                 result = await asyncio.wait_for(call_api(), timeout=timeout_seconds)
                 logger.info(f"[OCR] Sucesso com modelo {model}! Resultado: {result[:200] if result else 'VAZIO'}...")
@@ -338,10 +358,10 @@ async def _call_groq_vision(
                             )
                             return r.choices[0].message.content or ""
                         raw = await asyncio.wait_for(call_api_no_json(), timeout=timeout_seconds)
-                        m = re.search(r"\{.*\}", raw, re.DOTALL)
-                        if m:
+                        limpo = _limpar_resposta_ocr(raw, json_mode)
+                        if limpo and limpo != "{}":
                             logger.info(f"[OCR] Fallback sem json_mode funcionou!")
-                            return m.group(0)
+                            return limpo
                     except Exception as e2:
                         logging.warning(f"[OCR] Fallback sem json_mode também falhou: {e2}")
                 last_error = e
