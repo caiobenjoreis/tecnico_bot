@@ -24,6 +24,13 @@ USE_GROQ = bool(GROQ_API_KEY)
 if not USE_GROQ:
     logger.warning("⚠️ Groq API não configurada! OCR automático não funcionará.")
 
+# Configurações OCR.space com validação
+OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY", "")
+USE_OCR_SPACE = bool(OCR_SPACE_API_KEY)
+
+if not USE_OCR_SPACE:
+    logger.warning("⚠️ OCR.space API não configurada! OCR fallback não funcionará.")
+
 # IDs de Administradores - Agora vem do .env
 ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "1797158471")
 ADMIN_IDS = [int(id.strip()) for id in ADMIN_IDS_STR.split(",") if id.strip().isdigit()]

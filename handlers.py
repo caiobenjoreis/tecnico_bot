@@ -306,6 +306,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text('🎭 *Gerador de Máscaras*\n\nSelecione o modelo desejado:', reply_markup=reply_markup, parse_mode='Markdown')
         return AGUARDANDO_TIPO_MASCARA
 
+    elif query.data.startswith('mask_'):
+        # Seleção de tipo de máscara chegando fora do estado AGUARDANDO_TIPO_MASCARA
+        # (ex: entry point sem contexto ativo) — delegar direto ao handler correto
+        return await receber_tipo_mascara(update, context)
+
     # Callbacks do painel admin
     elif query.data.startswith('admin_'):
         from admin_handlers import admin_callback_handler
@@ -340,11 +345,37 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ Sessão expirada. Use /start", show_alert=True)
             return ConversationHandler.END
 
-    # Callbacks de estados internos que podem chegar fora do contexto (ex: bot reiniciado)
+    # Callbacks do fluxo de máscaras que chegam fora do estado correto.
+    # Se tipo_mascara ainda está no contexto, redireciona para o handler adequado.
+    if query.data in ('gerar_mascara', 'skip_photo'):
+        if context.user_data.get('tipo_mascara'):
+            return await receber_foto_mascara(update, context)
+        await query.answer("⏳ Sessão expirada. Use /start para recomeçar.", show_alert=True)
+        return ConversationHandler.END
+
+    # Callbacks de tipo de pendência
+    if query.data.startswith('pend_'):
+        if context.user_data.get('tipo_mascara'):
+            return await receber_tipo_pendencia(update, context)
+        await query.answer("⏳ Sessão expirada. Use /start para recomeçar.", show_alert=True)
+        return ConversationHandler.END
+
+    # Callbacks de motivo de cancelamento
+    if query.data.startswith('canc_'):
+        if context.user_data.get('tipo_mascara'):
+            return await receber_motivo_cancelamento(update, context)
+        await query.answer("⏳ Sessão expirada. Use /start para recomeçar.", show_alert=True)
+        return ConversationHandler.END
+
+    # Callbacks de operadora do repasse
+    if query.data.startswith('oper_'):
+        if context.user_data.get('tipo_mascara'):
+            return await receber_operadora_repasse(update, context)
+        await query.answer("⏳ Sessão expirada. Use /start para recomeçar.", show_alert=True)
+        return ConversationHandler.END
+
     callbacks_sessao = [
         'trocou_ont_sim', 'trocou_ont_nao',
-        'gerar_mascara', 'skip_photo',
-        'confirmar_sa_dup', 'cancelar_registro',
         'retry_save',
     ]
     if query.data in callbacks_sessao:
@@ -394,7 +425,17 @@ async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
     # Inicializar lista de fotos se não existir
     if 'fotos_mascara' not in context.user_data:
         context.user_data['fotos_mascara'] = []
-    
+
+    # Verificar se o tipo de máscara está no contexto (proteção contra sessão expirada)
+    if not context.user_data.get('tipo_mascara'):
+        msg_target = update.callback_query.message if update.callback_query else update.message
+        await msg_target.reply_text(
+            '⚠️ Sessão expirada. Use o menu principal para selecionar o tipo de máscara novamente.'
+        )
+        if update.callback_query:
+            await update.callback_query.answer()
+        return ConversationHandler.END
+
     # Se enviou foto, acumula
     if update.message and update.message.photo:
         photo = update.message.photo[-1]
@@ -453,14 +494,39 @@ async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
     # Salvar dados extraídos
     context.user_data['dados_mascara'] = dados
     
-    # Agora perguntar informações complementares baseado no tipo
+    # Helper para enviar mensagem sempre via send_message (evita usar a mensagem do callback
+    # que pode ter sido deletada pelo delete() da msg de processamento acima)
+    chat_id = update.effective_chat.id
+    async def reply(text, reply_markup=None):
+        return await context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
+    # Feedback do OCR: mostra ao usuário o que foi extraído das imagens
     tipo = context.user_data.get('tipo_mascara')
+    if imgs and dados:
+        campos_preenchidos = [k for k, v in dados.items() if v]
+        campos_vazios = [k for k, v in dados.items() if not v]
+        if campos_preenchidos:
+            preenchidos_str = '\n'.join([f'  ✅ `{k}`: {dados[k][:50]}' for k in campos_preenchidos])
+            msg_ocr = f'📸 *OCR:* {len(campos_preenchidos)}/{len(dados)} campos detectados:\n{preenchidos_str}'
+        else:
+            msg_ocr = '⚠️ *OCR:* Nenhum campo foi detectado nas imagens. Você precisará preencher tudo manualmente.'
+        if campos_vazios:
+            msg_ocr += f'\n\n🖊️ *Campos não encontrados:* {", ".join(campos_vazios)}'
+        await reply(msg_ocr)
+    elif not imgs:
+        await reply('ℹ️ Nenhuma imagem enviada. Preencha os dados manualmente.')
+
+    # Agora perguntar informações complementares baseado no tipo
     
     if tipo == 'Batimento CDOE':
-        await (update.callback_query.message if update.callback_query else update.message).reply_text(
+        await reply(
             '📝 *Informações Complementares*\n\n'
-            'Digite as *Observações* (ou envie "-" se não houver):',
-            parse_mode='Markdown'
+            'Digite as *Observações* (ou envie "-" se não houver):'
         )
         return AGUARDANDO_OBS_BATIMENTO
         
@@ -472,12 +538,10 @@ async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
             [InlineKeyboardButton("🔧 Infraestrutura", callback_data='pend_infraestrutura')],
             [InlineKeyboardButton("📋 Outro", callback_data='pend_outro')]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await (update.callback_query.message if update.callback_query else update.message).reply_text(
+        await reply(
             '📝 *Informações Complementares*\n\n'
             'Selecione o *Tipo de Pendência*:',
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return AGUARDANDO_TIPO_PENDENCIA
         
@@ -489,28 +553,24 @@ async def receber_foto_mascara(update: Update, context: ContextTypes.DEFAULT_TYP
             [InlineKeyboardButton("⏰ Cliente não Aguardou", callback_data='canc_nao_aguardou')],
             [InlineKeyboardButton("📋 Outro", callback_data='canc_outro')]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await (update.callback_query.message if update.callback_query else update.message).reply_text(
+        await reply(
             '📝 *Informações Complementares*\n\n'
             'Selecione o *Motivo do Cancelamento*:',
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return AGUARDANDO_MOTIVO_CANCELAMENTO
         
     elif tipo == 'Repasse':
-        logger.info("="*60)
         logger.info("[MASCARA] Tipo é Repasse! Pedindo cidade...")
-        logger.info(f"[MASCARA] Retornando AGUARDANDO_CIDADE_REPASSE com valor: {AGUARDANDO_CIDADE_REPASSE}")
-        logger.info("="*60)
-        await (update.callback_query.message if update.callback_query else update.message).reply_text(
+        await reply(
             '📝 *Informações Complementares*\n\n'
-            'Digite a *Cidade*:',
-            parse_mode='Markdown'
+            'Digite a *Cidade*:'
         )
         return AGUARDANDO_CIDADE_REPASSE
-    
-    # Fallback (não deveria chegar aqui)
+
+    # Fallback: tipo desconhecido — não deve ocorrer em uso normal
+    logger.error(f"[MASCARA] Tipo de máscara desconhecido no receber_foto_mascara: {tipo!r}")
+    await context.bot.send_message(chat_id=chat_id, text='❌ Tipo de máscara inválido. Use /start para recomeçar.')
     return ConversationHandler.END
 
 # ==================== HANDLERS DE DADOS COMPLEMENTARES DAS MÁSCARAS ====================
@@ -537,9 +597,9 @@ async def receber_tipo_pendencia(update: Update, context: ContextTypes.DEFAULT_T
     tipo_pendencia = tipo_map.get(query.data, 'Outro')
     context.user_data['tipo_pendencia'] = tipo_pendencia
     
-    await query.edit_message_text(
-        f'✅ Tipo: *{tipo_pendencia}*\n\n'
-        'Agora digite as *Observações* detalhadas (ou "-" se não houver):',
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=f'✅ Tipo: *{tipo_pendencia}*\n\nAgora digite as *Observações* detalhadas (ou "-" se não houver):',
         parse_mode='Markdown'
     )
     return AGUARDANDO_OBS_PENDENCIA
@@ -616,9 +676,9 @@ async def receber_operadora_repasse(update: Update, context: ContextTypes.DEFAUL
     context.user_data['operadora_repasse'] = operadora
     logger.info(f"[MASCARA] Operadora salva: {operadora}")
     
-    await query.edit_message_text(
-        f'✅ Operadora: *{operadora}*\n\n'
-        'Digite as *Observações* (ou "-" se não houver):',
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=f'✅ Operadora: *{operadora}*\n\nDigite as *Observações* (ou "-" se não houver):',
         parse_mode='Markdown'
     )
     logger.info(f"[MASCARA] Mensagem de obs enviada. Retornando AGUARDANDO_OBS_REPASSE")
@@ -714,6 +774,16 @@ async def gerar_mascara_final(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     msg = f"✅ *Máscara Gerada com Sucesso!*\n\n```\n{texto_final}\n```\n\n👆 _Toque para copiar_"
     
+    # Proteção: se texto_final ficou vazio, tipo era inválido
+    if not texto_final:
+        logger.error(f"[MASCARA] gerar_mascara_final chamado com tipo desconhecido: {tipo!r}")
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text('❌ Tipo de máscara inválido. Use /start para recomeçar.')
+        else:
+            await update.message.reply_text('❌ Tipo de máscara inválido. Use /start para recomeçar.')
+        return ConversationHandler.END
+
     # Enviar a máscara
     if update.callback_query:
         try:
