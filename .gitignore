@@ -2,29 +2,20 @@
 __pycache__/
 *.pyc
 .env
-# Don't ignore all JSON files - only specific ones if needed
-# *.json
+*.json
 
 # Testes e setup local (não necessário em produção)
 test_local.py
-test_env.py
-test_groq_api.py
-test_ocr.py
-check_states.py
-check_conversation_states.py
-test_conversation_states.py
 setup_teste.bat
 run_test.bat
 run_bot.bat
 criar_env.bat
 bot_test.log
-bot_output.log
 INICIO_RAPIDO.md
 CONFIGURAR_ENV.md
 DEBUG_APROVACAO.md
 CHECKLIST_CORRECOES.md
 CORRECOES_GESTAO_ACESSO.md
-check_syntax.py
 
 # IDEs
 .vscode/
@@ -35,7 +26,3 @@ check_syntax.py
 # Sistema
 .DS_Store
 Thumbs.db
-
-# Temp files
-tmp_*.jpg
-*.tmp

@@ -58,8 +58,6 @@ try:
     logger = colorlog.getLogger(__name__)
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
-    # Evitar logs duplicados (o handler do root do start.py também capturaria)
-    logger.propagate = False
 except ImportError:
     # Fallback para logging padrão se colorlog não estiver disponível
     logging.basicConfig(
