@@ -936,7 +936,7 @@ async def confirmar_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE
                     )
                 
                 enviados += 1
-                sucessos_detalhadas.append(user_name)
+                sucessos_detalhados.append(user_name)
                 
                 if pin_message and message_sent:
                     try:
@@ -1072,12 +1072,14 @@ async def admin_poll_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     }
     
     users = await db.get_all_users()
+    # Enviar apenas para técnicos ATIVOS (bloqueados/pendentes não recebem)
+    usuarios_ativos = [uid for uid, u in users.items() if u.get('status', 'ativo') == 'ativo']
     
     msg = (
         '📊 *Confirmar Enquete*\n\n'
         f'❓ Pergunta: {poll.question}\n'
         f'🔢 Opções: {len(poll.options)}\n'
-        f'👥 Destinatários: {len(users)} técnicos\n\n'
+        f'👥 Destinatários: {len(usuarios_ativos)} técnicos ativos\n\n'
         'Deseja enviar agora?'
     )
     
@@ -1105,12 +1107,14 @@ async def confirmar_enquete(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
         
     users = await db.get_all_users()
+    # Enviar apenas para técnicos ATIVOS
+    usuarios_ativos = [uid for uid, u in users.items() if u.get('status', 'ativo') == 'ativo']
     await query.edit_message_text('📤 Enviando enquete...')
     
     enviados = 0
     falhas = 0
     
-    for uid in users.keys():
+    for uid in usuarios_ativos:
         try:
             await context.bot.send_poll(
                 chat_id=int(uid),
@@ -1141,6 +1145,7 @@ async def confirmar_enquete(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
     await query.edit_message_text(
         f'✅ *Enquete Enviada!*\n\n'
+        f'👥 Destinatários: {len(usuarios_ativos)} técnicos ativos\n'
         f'📤 Enviados: {enviados}\n'
         f'❌ Falhas: {falhas}',
         parse_mode='Markdown'

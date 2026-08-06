@@ -431,42 +431,56 @@ async def extrair_campos_por_imagens(images: list) -> dict:
                 
     return agg
 
-
 async def extrair_campo_especifico(images: List[bytes], campo: str) -> dict:
     """
     Extrai um campo específico de uma ou mais imagens com prompt focado.
+    Se houver mais de 3 imagens, processa em lotes e faz merge (primeiro valor válido ganha).
     """
     user_prompt = OCR_PROMPTS_ESPECIFICOS.get(campo, f"Extraia o campo {campo}. Retorne JSON.")
     system_prompt = "Você é um especialista em OCR. Extraia apenas o dado solicitado. Se não encontrar, retorne null no JSON."
 
-    response_text = await _call_groq_vision(system_prompt, user_prompt, images, json_mode=True)
-    
-    try:
-        data = json.loads(response_text)
-    except:
-        return {}
+    def validar(campo: str, data: dict) -> dict:
+        """Valida o campo extraído com as regras do campo."""
+        result = {}
+        if campo == "sa":
+            val = str(data.get("sa") or "").strip().upper()
+            if re.match(r"^\d+$", val): val = f"SA-{val}"
+            if is_valid_sa(val): result["sa"] = val
+        elif campo == "gpon":
+            val = str(data.get("gpon") or "").strip().upper()
+            if is_valid_gpon(val): result["gpon"] = val
+        elif campo == "serial_do_modem":
+            val = str(data.get("serial_do_modem") or "").strip().upper()
+            if is_valid_serial(val): result["serial_do_modem"] = val
+        elif campo == "mesh":
+            raw = data.get("mesh") or []
+            if isinstance(raw, str): raw = [raw]
+            valid_mesh = [str(m).strip().upper() for m in raw if is_valid_serial(str(m).strip().upper())]
+            if valid_mesh: result["mesh"] = valid_mesh
+        return result
 
-    # Validação específica
+    # Batching: modelo suporta até 3 imagens por chamada.
+    MAX_POR_LOTE = 3
+    lotes = [images[i:i+MAX_POR_LOTE] for i in range(0, len(images), MAX_POR_LOTE)]
+    logger.info(f"[OCR] extrair_campo_especifico('{campo}'): {len(images)} imagens → {len(lotes)} lote(s)")
+
     result = {}
-    if campo == "sa":
-        val = str(data.get("sa") or "").strip().upper()
-        if re.match(r"^\d+$", val): val = f"SA-{val}"
-        if is_valid_sa(val): result["sa"] = val
-        
-    elif campo == "gpon":
-        val = str(data.get("gpon") or "").strip().upper()
-        if is_valid_gpon(val): result["gpon"] = val
-        
-    elif campo == "serial_do_modem":
-        val = str(data.get("serial_do_modem") or "").strip().upper()
-        if is_valid_serial(val): result["serial_do_modem"] = val
-        
-    elif campo == "mesh":
-        raw = data.get("mesh") or []
-        if isinstance(raw, str): raw = [raw]
-        valid_mesh = [str(m).strip().upper() for m in raw if is_valid_serial(str(m).strip().upper())]
-        if valid_mesh: result["mesh"] = valid_mesh
+    for idx_batch, lote in enumerate(lotes):
+        response_text = await _call_groq_vision(system_prompt, user_prompt, lote, json_mode=True)
+        try:
+            data = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            logger.warning(f"[OCR] extrair_campo_especifico '{campo}' lote {idx_batch+1}/{len(lotes)}: falha ao parsear JSON. Erro: {e}. Resposta: {response_text[:200]!r}")
+            continue
+        batch_result = validar(campo, data)
+        if batch_result:
+            # Merge: primeiro valor válido ganha
+            for k, v in batch_result.items():
+                if not result.get(k):
+                    result[k] = v
+            logger.info(f"[OCR] extrair_campo_especifico '{campo}' lote {idx_batch+1}/{len(lotes)}: {batch_result}")
 
+    logger.info(f"[OCR] extrair_campo_especifico '{campo}' resultado final: {result}")
     return result
 
 async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None) -> dict:
@@ -549,18 +563,24 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
     def normalizar(data: dict) -> dict:
         result = {}
         for k, v in data.items():
+            logger.info(f"[OCR][DEBUG] Normalizando campo '{k}' com valor bruto: {v!r}")
             if v is None or str(v).strip().lower() in ("null", "n/a", ""):
                 result[k] = ""
             elif k in ['telefone', 'documento']:
                 result[k] = str(v).strip()
             else:
                 result[k] = str(v).strip().upper()
+            logger.info(f"[OCR][DEBUG] Campo '{k}' normalizado para: {result[k]!r}")
         return result
 
     def merge_resultados(acumulado: dict, novo: dict) -> dict:
         for k, v in novo.items():
+            logger.info(
+                f"[OCR][DEBUG] Merge campo '{k}': atual={acumulado.get(k)!r} novo={v!r}"
+            )
             if v and not acumulado.get(k):
                 acumulado[k] = v
+                logger.info(f"[OCR][DEBUG] Campo '{k}' preenchido no acumulado com: {v!r}")
         return acumulado
 
     def construir_user_prompt(num_imagens: int, lote_info: str = "") -> str:
