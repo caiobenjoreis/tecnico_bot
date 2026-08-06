@@ -18,11 +18,18 @@ if not USE_SUPABASE:
 
 # Configurações Groq com validação
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "qwen/qwen3.6-27b")
 USE_GROQ = bool(GROQ_API_KEY)
 
 if not USE_GROQ:
     logger.warning("⚠️ Groq API não configurada! OCR automático não funcionará.")
+
+# Configurações OCR.space com validação
+OCR_SPACE_API_KEY = os.getenv("OCR_SPACE_API_KEY", "")
+USE_OCR_SPACE = bool(OCR_SPACE_API_KEY)
+
+if not USE_OCR_SPACE:
+    logger.warning("⚠️ OCR.space API não configurada! OCR fallback não funcionará.")
 
 # IDs de Administradores - Agora vem do .env
 ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "1797158471")

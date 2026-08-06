@@ -123,11 +123,15 @@ class DatabaseManager:
             self._user_cache.clear()
 
     async def check_sa_exists(self, sa: str) -> bool:
-        """Verifica se uma SA já foi registrada."""
+        """Verifica se uma SA já foi registrada (normalizes SA first)."""
         if not self.client: return False
+        # Normalize SA before checking
+        sa_normalized = str(sa).strip().upper()
+        if sa_normalized.isdigit():
+            sa_normalized = f"SA-{sa_normalized}"
         try:
             res = await self._run_async(
-                lambda: self.client.table("instalacoes").select("id").eq("sa", sa).limit(1).execute()
+                lambda: self.client.table("instalacoes").select("id").eq("sa", sa_normalized).limit(1).execute()
             )
             return bool(res.data)
         except Exception as e:
@@ -137,6 +141,13 @@ class DatabaseManager:
     async def save_installation(self, data: dict) -> bool:
         if not self.client: return False
         try:
+            # Normalize SA before saving
+            if 'sa' in data:
+                sa_normalized = str(data['sa']).strip().upper()
+                if sa_normalized.isdigit():
+                    sa_normalized = f"SA-{sa_normalized}"
+                data['sa'] = sa_normalized
+            
             await self._run_async(
                 lambda: self.client.table("instalacoes").insert(data).execute()
             )
@@ -163,7 +174,11 @@ class DatabaseManager:
                     q = q.eq('tecnico_id', filters['tecnico_id'])
                 
                 if 'sa' in filters:
-                    q = q.eq('sa', filters['sa'])
+                    # Normalize SA filter
+                    sa_filter = str(filters['sa']).strip().upper()
+                    if sa_filter.isdigit():
+                        sa_filter = f"SA-{sa_filter}"
+                    q = q.eq('sa', sa_filter)
 
                 # Busca textual via ilike no banco (evita carregar tudo em memória)
                 if 'termo_busca' in filters:
