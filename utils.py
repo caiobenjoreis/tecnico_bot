@@ -600,7 +600,7 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
     As imagens são ABAS DIFERENTES do mesmo ticket (INFO, CLIENTE, REDE).
     Se houver mais de 3 imagens, processa em lotes e faz merge dos resultados.
 
-    Fallback: Se Groq vision não estiver disponível, usa Tesseract OCR local.
+    Fallback: Se Groq não extrair nada, usa OCR.space (e Tesseract local como último recurso).
     """
     # Mapa de campos por tipo de máscara: (nome, onde_encontrar)
     if tipo_mascara == 'Batimento CDOE':
@@ -735,6 +735,13 @@ async def extrair_dados_completos(images: List[bytes], tipo_mascara: str = None)
         logger.info(f"[OCR] Lote {idx_batch+1}/{len(lotes)}: {len(batch_preenchidos)} campos → {batch_normalizado}")
         resultado = merge_resultados(resultado, batch_normalizado)
 
+        # Se o PRIMEIRO lote veio vazio ({}), o modelo não está lendo as imagens
+        # (comum no plano free: 429 + resposta vazia). Aborta os lotes restantes
+        # e vai direto pro fallback OCR.space — economiza 60-90s de retries.
+        if idx_batch == 0 and not batch_preenchidos:
+            logger.warning("[OCR] Primeiro lote sem dados — abortando lotes restantes e indo pro fallback")
+            break
+
     campos_preenchidos = [k for k, v in resultado.items() if v]
     logger.info(f"[OCR] Resultado final (merge de {len(lotes)} lote(s)): {len(campos_preenchidos)}/{len(resultado)} campos → {resultado}")
     
@@ -755,18 +762,18 @@ async def extrair_dados_ocr_space(images: List[bytes], tipo_mascara: str = None)
     Fallback usando OCR.space API quando Groq vision não está disponível.
     Extrai texto das imagens e tenta identificar campos usando regex.
     """
-    # Mapa de regex para cada campo
+    # Mapa de regex para cada campo (o texto já chega limpo de cabeçalhos/rodapés).
     regex_map = {
         'sa': r'SA[-\s]?(\d+)',
         'gpon': r'GPON[:\s]*([A-Z0-9]+)',
         'documento': r'Doc\.?\s*Assoc\.?[:\s]*(\d+)',
-        'atividade': r'Atividade[:\s]*([A-Z\s]+)',
-        'cliente': r'Cliente[:\s]*([A-Z\s]+)',
-        'telefone': r'Contato[:\s]*(\d+)',
-        'endereco': r'Endereco[:\s]*([^\n]+)',
-        'cdo': r'CDOPath[:\s]*([^\s\.]+)',
-        'porta': r'PTP\.FO\.O[:\s]*(\d+)',
-        'estacao': r'Estacao[:\s]*([A-Z0-9]+)',
+        'atividade': r'Atividade[:\s]*([^\t]+)',
+        'cliente': r'Cliente(?!\s*\d)[:\s]*([^\t]+)',
+        'telefone': r'Contato(?:\s*\d+)?[:\s]*(\d{8,})',
+        'endereco': r'Endere[çc]o[:\s]*([^\t]+)(?:\t([^\t]+))?',
+        'cdo': r'CDOPath[:\s]*([^\s:]+?)(?:-PTP|\t|$)',
+        'porta': r'PTP\.FO\.O[:\s]*([A-Z0-9_]+)',
+        'estacao': r'(?:Estacao|EST|Central)[:\s]*([^\t]+)',
     }
     
     resultado = {}
@@ -779,17 +786,41 @@ async def extrair_dados_ocr_space(images: List[bytes], tipo_mascara: str = None)
                 logger.warning(f"[OCR.space] Imagem {idx+1}: nenhum texto extraído")
                 continue
             
+            # Remover linhas de cabeçalho/rodapé das abas (ex: "INFO DETALHES CLIENTE NOTAS 1"
+            # e o rodapé "Atividade Rede Ações") — linhas com 2+ tabs ou com "Ações".
+            # Depois junta as linhas com tab, mantendo o padrão label<TAB>valor.
+            linhas_uteis = [l.rstrip('\t') for l in text.splitlines() if l.count('\t') <= 1 and 'Ações' not in l]
+            text = '\t'.join(linhas_uteis)
+            
             logger.info(f"[OCR.space] Imagem {idx+1}: {len(text)} caracteres extraídos")
             
             # Tentar extrair cada campo usando regex
             for campo, regex in regex_map.items():
-                if campo not in resultado or not resultado[campo]:
-                    match = re.search(regex, text, re.IGNORECASE)
-                    if match:
-                        valor = match.group(1).strip()
-                        if valor:
-                            resultado[campo] = valor.upper()
-                            logger.info(f"[OCR.space] Campo {campo} encontrado: {valor}")
+                if campo in resultado and resultado[campo]:
+                    continue
+                match = re.search(regex, text, re.IGNORECASE)
+                if not match:
+                    continue
+                valor = match.group(1).strip()
+                if campo == 'endereco':
+                    # Endereço pode continuar no campo seguinte (ex: "Manso, Blumenau - SC...")
+                    if match.lastindex and match.lastindex >= 2 and match.group(2):
+                        cont = match.group(2).strip()
+                        if cont and (',' in cont or '-' in cont or 'complementos' in cont.lower()):
+                            valor = f"{valor} {cont}"
+                    # Remover lixo de campo vazio do sistema (ex: "Complementos: null null")
+                    valor = re.sub(r'\s*Complementos:\s*null\s*null?', '', valor, flags=re.IGNORECASE).strip()
+                if valor:
+                    resultado[campo] = valor.upper()
+                    logger.info(f"[OCR.space] Campo {campo} encontrado: {valor}")
+            
+            # Fallback para telefone: se nenhum rótulo "Contato" foi achado nesta imagem,
+            # procura qualquer número de 10-11 dígitos (não pega SA/CEP/Doc, que têm 8)
+            if not resultado.get('telefone'):
+                m_phone = re.search(r'(?<!\d)(\d{10,11})(?!\d)', text)
+                if m_phone:
+                    resultado['telefone'] = m_phone.group(1)
+                    logger.info(f"[OCR.space] Campo telefone (fallback) encontrado: {m_phone.group(1)}")
         
         except Exception as e:
             logger.warning(f"[OCR.space] Erro ao processar imagem {idx+1}: {e}")
@@ -889,18 +920,18 @@ async def extrair_dados_tesseract(images: List[bytes], tipo_mascara: str = None)
         logger.warning("[OCR] Tesseract não disponível (pytesseract ou PIL não instalado)")
         return {}
     
-    # Mapa de regex para cada campo
+    # Mapa de regex para cada campo (o texto já chega limpo de cabeçalhos/rodapés).
     regex_map = {
         'sa': r'SA[-\s]?(\d+)',
         'gpon': r'GPON[:\s]*([A-Z0-9]+)',
         'documento': r'Doc\.?\s*Assoc\.?[:\s]*(\d+)',
-        'atividade': r'Atividade[:\s]*([A-Z\s]+)',
-        'cliente': r'Cliente[:\s]*([A-Z\s]+)',
-        'telefone': r'Contato[:\s]*(\d+)',
-        'endereco': r'Endereco[:\s]*([^\n]+)',
-        'cdo': r'CDOPath[:\s]*([^\s\.]+)',
-        'porta': r'PTP\.FO\.O[:\s]*(\d+)',
-        'estacao': r'Estacao[:\s]*([A-Z0-9]+)',
+        'atividade': r'Atividade[:\s]*([^\t]+)',
+        'cliente': r'Cliente(?!\s*\d)[:\s]*([^\t]+)',
+        'telefone': r'Contato(?:\s*\d+)?[:\s]*(\d{8,})',
+        'endereco': r'Endere[çc]o[:\s]*([^\t]+)(?:\t([^\t]+))?',
+        'cdo': r'CDOPath[:\s]*([^\s:]+?)(?:-PTP|\t|$)',
+        'porta': r'PTP\.FO\.O[:\s]*([A-Z0-9_]+)',
+        'estacao': r'(?:Estacao|EST|Central)[:\s]*([^\t]+)',
     }
     
     resultado = {}
@@ -909,17 +940,40 @@ async def extrair_dados_tesseract(images: List[bytes], tipo_mascara: str = None)
         try:
             img = Image.open(_io.BytesIO(img_bytes))
             text = pytesseract.image_to_string(img, lang='por')
+            # Remover linhas de cabeçalho/rodapé das abas (ex: "INFO DETALHES CLIENTE NOTAS 1"
+            # e o rodapé "Atividade Rede Ações") — linhas com 2+ tabs ou com "Ações".
+            # Depois junta as linhas com tab, mantendo o padrão label<TAB>valor.
+            linhas_uteis = [l.rstrip('\t') for l in text.splitlines() if l.count('\t') <= 1 and 'Ações' not in l]
+            text = '\t'.join(linhas_uteis)
             logger.info(f"[OCR Tesseract] Imagem {idx+1}: {len(text)} caracteres extraídos")
             
             # Tentar extrair cada campo usando regex
             for campo, regex in regex_map.items():
-                if campo not in resultado or not resultado[campo]:
-                    match = re.search(regex, text, re.IGNORECASE)
-                    if match:
-                        valor = match.group(1).strip()
-                        if valor:
-                            resultado[campo] = valor.upper()
-                            logger.info(f"[OCR Tesseract] Campo {campo} encontrado: {valor}")
+                if campo in resultado and resultado[campo]:
+                    continue
+                match = re.search(regex, text, re.IGNORECASE)
+                if not match:
+                    continue
+                valor = match.group(1).strip()
+                if campo == 'endereco':
+                    # Endereço pode continuar no campo seguinte (ex: "Manso, Blumenau - SC...")
+                    if match.lastindex and match.lastindex >= 2 and match.group(2):
+                        cont = match.group(2).strip()
+                        if cont and (',' in cont or '-' in cont or 'complementos' in cont.lower()):
+                            valor = f"{valor} {cont}"
+                    # Remover lixo de campo vazio do sistema (ex: "Complementos: null null")
+                    valor = re.sub(r'\s*Complementos:\s*null\s*null?', '', valor, flags=re.IGNORECASE).strip()
+                if valor:
+                    resultado[campo] = valor.upper()
+                    logger.info(f"[OCR Tesseract] Campo {campo} encontrado: {valor}")
+            
+            # Fallback para telefone: se nenhum rótulo "Contato" foi achado nesta imagem,
+            # procura qualquer número de 10-11 dígitos (não pega SA/CEP/Doc, que têm 8)
+            if not resultado.get('telefone'):
+                m_phone = re.search(r'(?<!\d)(\d{10,11})(?!\d)', text)
+                if m_phone:
+                    resultado['telefone'] = m_phone.group(1)
+                    logger.info(f"[OCR Tesseract] Campo telefone (fallback) encontrado: {m_phone.group(1)}")
         
         except Exception as e:
             logger.warning(f"[OCR Tesseract] Erro ao processar imagem {idx+1}: {e}")
